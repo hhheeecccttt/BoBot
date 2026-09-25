@@ -12,6 +12,8 @@ import db
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
+# Testing: set UNLIMITED_SPINS=1 to bypass the daily spin limit.
+UNLIMITED_SPINS = os.getenv("UNLIMITED_SPINS", "0") == "1"
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -176,7 +178,7 @@ async def on_ready():
         await bot.tree.sync()
     except Exception as e:
         print(f"Slash sync failed: {e}")
-    print(f"Logged in as {bot.user} — /spin ready!")
+    print(f"Logged in as {bot.user} — /spin ready!" + (" [UNLIMITED SPINS TEST MODE]" if UNLIMITED_SPINS else ""))
 
 
 # ---------- commands ----------
@@ -188,7 +190,7 @@ async def spin(interaction: discord.Interaction):
     db.init_db()
     u = db.reset_spins_if_new_day(uid, today_str())
 
-    if u["spins_used_today"] >= config.SPINS_PER_DAY:
+    if not UNLIMITED_SPINS and u["spins_used_today"] >= config.SPINS_PER_DAY:
         await interaction.followup.send(
             f"❌ You're out of spins! You get **{config.SPINS_PER_DAY}** per day.\n"
             f"⏳ Resets in **{time_until_reset()}**.\n"
@@ -210,7 +212,10 @@ async def spin(interaction: discord.Interaction):
 
     pct, one_in = config.combined_odds(rarity, quality)
     value = config.quicksell_value(rarity)
-    spins_left = config.SPINS_PER_DAY - u["spins_used_today"]
+    if UNLIMITED_SPINS:
+        spins_left_text = "∞ (test mode)"
+    else:
+        spins_left_text = f"{config.SPINS_PER_DAY - u['spins_used_today']}/{config.SPINS_PER_DAY}"
 
     newly = check_achievements(uid, u, rarity, quality)
     ach_text = ("\n\n" + "\n".join(newly)) if newly else ""
@@ -223,7 +228,7 @@ async def spin(interaction: discord.Interaction):
     )
     embed.add_field(name="📊 Odds", value=f"**{pct:.4g}%**\n{one_in}", inline=True)
     embed.add_field(name="💰 Quicksell", value=f"${value:,}", inline=True)
-    embed.add_field(name="🎰 Spins left today", value=f"{spins_left}/{config.SPINS_PER_DAY}", inline=True)
+    embed.add_field(name="🎰 Spins left today", value=spins_left_text, inline=True)
     embed.set_footer(text=f"🔥 {u['streak']}-day streak • {interaction.user.display_name}")
     if rarity == "DIH":
         embed.add_field(name="‼️", value="**DIH TIER?! NO WAY.** @everyone look at this pull!! (remove ping if annoying)", inline=False)
