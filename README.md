@@ -43,7 +43,9 @@ python3 bot.py
 | `/market_cancel <id>` | Take down your listing |
 | `/stats [user]` | Total spins, pulls per rarity, streak, balance |
 | `/achievements` | Your badges |
-| `/odds` | Full 15-combo odds table |
+| `/ores` | All rarities, odds, quicksell values, and ore lists |
+| `/leaderboard` | Top 10 richest players |
+| `/help` | List of every command |
 
 ## Values / odds (from your spec)
 

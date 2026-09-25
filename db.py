@@ -244,3 +244,23 @@ def get_achievements(user_id: str) -> list[str]:
     with _lock, get_conn() as conn:
         rows = conn.execute("SELECT ach_id FROM achievements WHERE user_id=?", (user_id,)).fetchall()
         return [r["ach_id"] for r in rows]
+
+# ---------- leaderboard ----------
+
+def top_balances(limit: int = 10) -> list[dict]:
+    with _lock, get_conn() as conn:
+        rows = conn.execute(
+            "SELECT user_id, balance, total_spins FROM users ORDER BY balance DESC, total_spins DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_rank(user_id: str) -> int:
+    """1-based rank by balance. Returns -1 if user not found."""
+    with _lock, get_conn() as conn:
+        row = conn.execute("SELECT balance FROM users WHERE user_id=?", (user_id,)).fetchone()
+        if row is None:
+            return -1
+        higher = conn.execute("SELECT COUNT(*) c FROM users WHERE balance > ?", (row["balance"],)).fetchone()
+        return higher["c"] + 1

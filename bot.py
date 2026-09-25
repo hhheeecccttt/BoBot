@@ -402,15 +402,66 @@ async def achievements(interaction: discord.Interaction):
     await interaction.response.send_message("🏆 **Achievements**\n" + "\n".join(lines))
 
 
-@bot.tree.command(name="odds", description="Show the full rarity + quality odds table.")
-async def odds(interaction: discord.Interaction):
-    lines = []
+@bot.tree.command(name="ores", description="Show all rarities, odds, values, and ores.")
+async def ores(interaction: discord.Interaction):
+    embed = discord.Embed(title="⛏️ Ores & Odds", color=0xFF9800)
     for r, ri in config.RARITIES.items():
-        for q, qi in config.QUALITIES.items():
-            pct, one_in = config.combined_odds(r, q)
-            lines.append(f"{ri['emoji']} {r} + {q}: **{pct:.4g}%** ({one_in})")
-    # Discord message limit: split fine — this is ~15 lines, OK
-    await interaction.response.send_message("🎲 **Full Odds**\n" + "\n".join(lines))
+        ore_list = ", ".join(config.ORES[r])
+        # rarest combo for this rarity (with Perfect quality) for the headline odds
+        pct, one_in = config.combined_odds(r, "Perfect")
+        embed.add_field(
+            name=f"{ri['emoji']} {r} — {ri['chance']}%",
+            value=f"Ores: **{ore_list}**\nQuicksell: **${ri['value']:,}**\n"
+                  f"Rarest ({r} Perfect): **{pct:.4g}%** ({one_in})",
+            inline=False,
+        )
+    q_lines = []
+    for q, qi in config.QUALITIES.items():
+        q_lines.append(f"{qi['emoji']} **{q}** — {qi['chance']}%")
+    embed.add_field(name="✨ Qualities (rolled on every spin)", value="\n".join(q_lines), inline=False)
+    embed.add_field(
+        name="📊 How combo odds work",
+        value="rarity% × quality% — e.g. DIH Perfect = 0.1% × 1% = **0.001% (1 in 100,000)**",
+        inline=False,
+    )
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="leaderboard", description="Top 10 richest players.")
+async def leaderboard(interaction: discord.Interaction):
+    top = db.top_balances(10)
+    if not top:
+        await interaction.response.send_message("📭 Nobody has any money yet! Use `/spin` then `/quicksell`.")
+        return
+    medals = ["🥇", "🥈", "🥉"]
+    lines = []
+    for i, row in enumerate(top):
+        medal = medals[i] if i < 3 else f"`#{i+1}`"
+        lines.append(f"{medal} <@{row['user_id']}> — **${row['balance']:,}** ({row['total_spins']} spins)")
+    rank = db.get_rank(str(interaction.user.id))
+    footer = f"\n\nYour rank: **#{rank}**" if rank > 10 else ""
+    await interaction.response.send_message("💰 **Richest Players**" + "\n" + "\n".join(lines) + footer)
+
+
+@bot.tree.command(name="help", description="Show every command.")
+async def help_cmd(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "🤖 **BoBot Commands**\n"
+        f"🎰 `/spin` — roll an ore ({config.SPINS_PER_DAY}/day, resets 00:00 UTC)\n"
+        "💰 `/balance` — your money\n"
+        "🎒 `/inventory` — your ores + dropdown inspector\n"
+        "💸 `/quicksell` — sell matching ores instantly\n"
+        "💸 `/quicksell_all` — sell everything instantly\n"
+        "📦 `/market_post` — list an ore for other players\n"
+        "🏪 `/market_view` — browse the market\n"
+        "🛒 `/market_buy` — buy a listing by ID\n"
+        "🚫 `/market_cancel` — take down your listing\n"
+        "📊 `/stats` — spins, pulls, streak, balance\n"
+        "🏆 `/achievements` — your badges\n"
+        "⛏️ `/ores` — all rarities, odds, values, ore lists\n"
+        "💰 `/leaderboard` — top 10 richest players\n"
+        "❓ `/help` — this message"
+    )
 
 
 if __name__ == "__main__":
