@@ -1,0 +1,16 @@
+# CHANGE THIS to your own unique app name (and use the same name in the commands below)
+app = "bobot-ores"
+# CHANGE THIS to the region closest to you (fly platform regions).
+# Your volume MUST be created in this same region.
+primary_region = "iad"
+
+[env]
+  # SQLite lives on the persistent volume so balances/inventories survive restarts
+  DB_PATH = "/data/bot.db"
+
+[[mounts]]
+  source = "bobot_data"
+  destination = "/data"
+
+# NOTE: no [http_service] on purpose — this is a Discord bot (worker),
+# not a website. Fly keeps it running without exposing any ports.
