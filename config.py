@@ -73,13 +73,8 @@ def combined_odds(rarity: str, quality: str) -> tuple[float, str]:
     q = QUALITIES[quality]["chance"]
     pct = r * q / 100.0
     one_in = 100.0 / pct if pct > 0 else float("inf")
-    if one_in >= 1000:
-        one_in_str = f"1 in {one_in:,.0f}"
-    elif one_in >= 100:
-        one_in_str = f"1 in {one_in:,.1f}"
-    else:
-        one_in_str = f"1 in {one_in:,.2f}"
-    return pct, one_in_str
+    # Whole numbers only: 1 in 7.68 -> 1 in 8
+    return pct, f"1 in {round(one_in):,}"
 
 
 def quicksell_value(rarity: str) -> int:

@@ -323,23 +323,75 @@ async def quicksell_all(interaction: discord.Interaction):
 
 # ----- market -----
 
-@bot.tree.command(name="market_post", description="List one of your ores on the player market.")
-@app_commands.describe(rarity="Rarity", quality="Quality (Chipped/Scratched/Perfect)",
-                       ore="Exact ore name (see /inventory)", price="Price in $")
-@app_commands.choices(rarity=[app_commands.Choice(name=r, value=r) for r in config.RARITIES],
-                      quality=[app_commands.Choice(name=q, value=q) for q in config.QUALITIES])
-async def market_post(interaction: discord.Interaction, rarity: str, quality: str, ore: str, price: int):
-    if price < 1:
-        await interaction.response.send_message("❌ Price must be at least $1.", ephemeral=True)
+class MarketPriceModal(discord.ui.Modal, title="Set your price"):
+    def __init__(self, owner_id: int, rarity: str, quality: str, ore: str):
+        super().__init__()
+        self.owner_id = owner_id
+        self.rarity = rarity
+        self.quality = quality
+        self.ore = ore
+
+    price = discord.ui.TextInput(label="Price ($)", placeholder="e.g. 500", max_length=12)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("That's not your listing!", ephemeral=True)
+            return
+        try:
+            amount = int(str(self.price.value).replace(",", "").replace("$", "").strip())
+        except ValueError:
+            await interaction.response.send_message("❌ Price must be a whole number, e.g. `500`.", ephemeral=True)
+            return
+        if amount < 1:
+            await interaction.response.send_message("❌ Price must be at least $1.", ephemeral=True)
+            return
+        listing_id = db.market_list(str(self.owner_id), self.rarity, self.quality, self.ore, amount)
+        if listing_id is None:
+            await interaction.response.send_message("❌ You don't own that ore anymore.", ephemeral=True)
+            return
+        quick = config.quicksell_value(self.rarity)
+        await interaction.response.send_message(
+            f"📦 Listed **{self.quality} {self.ore}** ({self.rarity}) for **${amount:,}**! (ID: `{listing_id}`)\n"
+            f"Quicksell value would've been ${quick:,} — {'🤑 profit mindset!' if amount > quick else '⚠️ cheaper than quicksell!'}"
+        )
+
+
+class MarketSellSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, items: list[dict]):
+        self.owner_id = owner_id
+        options = []
+        for i in items[:25]:  # Discord limit
+            label = f"{i['quality']} {i['ore']} x{i['count']}"[:100]
+            desc = f"{i['rarity']} • quicksell ${config.quicksell_value(i['rarity']):,} each"[:100]
+            options.append(discord.SelectOption(label=label, description=desc,
+                                                value=f"{i['rarity']}|{i['quality']}|{i['ore']}"))
+        super().__init__(placeholder="Pick an ore to list…", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("That's not your inventory!", ephemeral=True)
+            return
+        rarity, quality, ore = self.values[0].split("|")
+        await interaction.response.send_modal(MarketPriceModal(self.owner_id, rarity, quality, ore))
+
+
+class MarketSellView(discord.ui.View):
+    def __init__(self, owner_id: int, items: list[dict]):
+        super().__init__(timeout=180)
+        self.add_item(MarketSellSelect(owner_id, items))
+
+
+@bot.tree.command(name="market_post", description="List one of your ores on the player market (pick from dropdown).")
+async def market_post(interaction: discord.Interaction):
+    uid = str(interaction.user.id)
+    items = db.get_inventory_grouped(uid)
+    if not items:
+        await interaction.response.send_message("🎒 Your inventory is empty! Use `/spin` first.", ephemeral=True)
         return
-    listing_id = db.market_list(str(interaction.user.id), rarity, quality, ore, price)
-    if listing_id is None:
-        await interaction.response.send_message("❌ You don't own that ore. Check `/inventory` for exact names.", ephemeral=True)
-        return
-    quick = config.quicksell_value(rarity)
     await interaction.response.send_message(
-        f"📦 Listed **{quality} {ore}** ({rarity}) for **${price:,}**! (ID: `{listing_id}`)\n"
-        f"Quicksell value would've been ${quick:,} — {'🤑 profit mindset!' if price > quick else '⚠️ cheaper than quicksell!'}"
+        "📦 **Pick an ore to list** — you'll set the price next:",
+        view=MarketSellView(interaction.user.id, items),
+        ephemeral=True,
     )
 
 

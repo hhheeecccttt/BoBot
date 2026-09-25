@@ -37,7 +37,7 @@ python3 bot.py
 | `/inventory` | Your ores + dropdown inspector |
 | `/quicksell <rarity> [quality] [ore] [amount]` | Sell matching ores at flat rarity value |
 | `/quicksell_all` | Sell everything |
-| `/market_post <rarity> <quality> <ore> <price>` | List one ore for others to buy |
+| `/market_post` | Pick an ore from a dropdown, set a price in the popup |
 | `/market_view` | Browse newest 10 listings |
 | `/market_buy <id>` | Buy a listing |
 | `/market_cancel <id>` | Take down your listing |
