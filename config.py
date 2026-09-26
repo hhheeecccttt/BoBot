@@ -80,3 +80,8 @@ def combined_odds(rarity: str, quality: str) -> tuple[float, str]:
 def quicksell_value(rarity: str) -> int:
     """Lowest value of the rarity — flat per your spec (quality doesn't change it for now)."""
     return RARITIES[rarity]["value"]
+
+
+def tier_name(rarity: str) -> str:
+    """Display name: Low -> Low Tier. Internal keys stay short (DB-safe)."""
+    return f"{rarity} Tier"

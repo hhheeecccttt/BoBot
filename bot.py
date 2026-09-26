@@ -136,9 +136,8 @@ def inspect_text(rarity: str, quality: str, ore: str, count: int) -> str:
     value_each = config.quicksell_value(rarity)
     pct, one_in = config.combined_odds(rarity, quality)
     return (
-        f"**{ore} ({quality})**\n"
-        f"Rarity: **{rarity}**\n"
-        f"Owned: **x{count}**\n"
+        f"**{ore} ({quality}) x{count}**\n"
+        f"Rarity: **{config.tier_name(rarity)}**\n"
         f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
         f"Quicksell: **${value_each:,}** each (**${value_each * count:,}** for all)\n"
         f"Tip: `/quicksell` to sell, `/market_list` to list it for other players."
@@ -154,7 +153,7 @@ class QualityInspectSelect(discord.ui.Select):
         options = []
         for s in stacks[:25]:  # Discord limit
             label = f"{s['ore']} ({s['quality']}) x{s['count']}"[:100]
-            desc = f"{s['rarity']} • quicksell ${config.quicksell_value(s['rarity']):,} each"[:100]
+            desc = f"{config.tier_name(s['rarity'])} • quicksell ${config.quicksell_value(s['rarity']):,} each"[:100]
             options.append(discord.SelectOption(label=label, description=desc,
                                                 value=f"{s['rarity']}|{s['quality']}"))
         super().__init__(placeholder="Inspect a stack…", options=options or [
@@ -269,7 +268,7 @@ async def spin(interaction: discord.Interaction):
 
     embed = discord.Embed(
         title=f"{ore} ({quality})!",
-        description=f"({rarity})",
+        description=f"{config.tier_name(rarity)}",
         color=config.RARITIES[rarity]["color"],
     )
     embed.add_field(name="📊 Odds", value=f"{one_in} chance", inline=True)
@@ -397,7 +396,7 @@ class MarketPriceModal(discord.ui.Modal, title="Set your price"):
             return
         quick = config.quicksell_value(self.rarity)
         await interaction.response.send_message(
-            f"📦 Listed **{self.quality} {self.ore}** ({self.rarity}) for **${amount:,}**! (ID: `{listing_id}`)\n"
+            f"📦 Listed **{self.quality} {self.ore}** ({config.tier_name(self.rarity)}) for **${amount:,}**! (ID: `{listing_id}`)\n"
             f"Quicksell value would've been ${quick:,} — {'🤑 profit mindset!' if amount > quick else '⚠️ cheaper than quicksell!'}"
         )
 
@@ -434,7 +433,7 @@ class ListStackSelect(discord.ui.Select):
         options = []
         for s in stacks[:25]:
             label = f"{s['ore']} ({s['quality']}) x{s['count']}"[:100]
-            desc = f"{s['rarity']} • quicksell ${config.quicksell_value(s['rarity']):,} each"[:100]
+            desc = f"{config.tier_name(s['rarity'])} • quicksell ${config.quicksell_value(s['rarity']):,} each"[:100]
             options.append(discord.SelectOption(label=label, description=desc,
                                                 value=f"{s['rarity']}|{s['quality']}"))
         super().__init__(placeholder="Choose which stack to list…", options=options)
@@ -500,7 +499,7 @@ async def format_listings(interaction: discord.Interaction, listings: list[dict]
     lines = []
     for l in listings:
         seller = await display_name(interaction, l["seller_id"])
-        lines.append(f"`{l['id']}` **{l['quality']} {l['ore']}** ({l['rarity']}) — **${l['price']:,}** — {seller}")
+        lines.append(f"`{l['id']}` **{l['quality']} {l['ore']}** ({config.tier_name(l['rarity'])}) — **${l['price']:,}** — {seller}")
     return lines
 
 
@@ -638,8 +637,8 @@ async def stats(interaction: discord.Interaction, user: discord.User | None = No
     await interaction.response.send_message(
         f"📊 **{target.display_name}'s Stats**\n"
         f"🎰 Total spins: **{u['total_spins']}**\n"
-        f"🪨 Low: **{u['low_pulls']}** | 💚 Mid: **{u['mid_pulls']}** | 💎 High: **{u['high_pulls']}**\n"
-        f"👑 Elite: **{u['elite_pulls']}** | 🌟 DIH: **{u['dih_pulls']}**\n"
+        f"🪨 Low Tier: **{u['low_pulls']}** | 💚 Mid Tier: **{u['mid_pulls']}** | 💎 High Tier: **{u['high_pulls']}**\n"
+        f"👑 Elite Tier: **{u['elite_pulls']}** | 🌟 DIH Tier: **{u['dih_pulls']}**\n"
         f"🔥 Streak: **{u['streak']}** days (best: **{u['longest_streak']}**)\n"
         f"💰 Balance: **${u['balance']:,}** | Earned: **${u['total_earned']:,}**\n"
         f"🎒 Inventory: **{inv_count}** ores"
@@ -660,11 +659,13 @@ async def ores(interaction: discord.Interaction):
     embed = discord.Embed(title="⛏️ Ores & Odds", color=0xFF9800)
     for r, ri in config.RARITIES.items():
         ore_list = ", ".join(config.ORES[r])
-        one_in = round(100.0 / ri["chance"]) if ri["chance"] > 0 else 0
+        exact = 100.0 / ri["chance"] if ri["chance"] > 0 else 0
+        # Whole numbers, except near-1 odds which get one decimal (1 in 1.4)
+        one_in_txt = f"{exact:.1f}" if round(exact) == 1 and exact != 1 else f"{round(exact):,}"
         embed.add_field(
-            name=f"{ri['emoji']} {r}",
+            name=f"{ri['emoji']} {config.tier_name(r)}",
             value=f"Ores: **{ore_list}**\nQuicksell: **${ri['value']:,}**\n"
-                  f"Odds: **{ri['chance']}%** (1 in {one_in:,} chance)",
+                  f"Odds: **{ri['chance']}%** (1 in {one_in_txt} chance)",
             inline=False,
         )
     q_lines = []
