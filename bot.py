@@ -69,28 +69,52 @@ def check_achievements(user_id: str, u: dict, rarity: str, quality: str) -> list
         if db.grant_achievement(user_id, aid):
             newly.append(f"🏆 **{config.ACHIEVEMENTS[aid][0]}** — {config.ACHIEVEMENTS[aid][1]}")
 
-    if u["total_spins"] >= 1:
+    ts = u["total_spins"]
+    if ts >= 1:
         grant("first_spin")
-    if u["total_spins"] >= 10:
+    if ts >= 10:
         grant("spins_10")
-    if u["total_spins"] >= 100:
+    if ts >= 100:
         grant("spins_100")
-    if rarity == "High":
-        grant("high_pull")
+    if ts >= 1000:
+        grant("spins_1000")
+    if ts >= 10000:
+        grant("spins_10000")
     if rarity == "Elite":
         grant("elite_pull")
     if rarity == "DIH":
         grant("dih_pull")
+        if u.get("dih_pulls", 0) >= 10:
+            grant("dih_10")
+        if u.get("dih_pulls", 0) >= 100:
+            grant("dih_100")
     if quality == "Perfect":
         grant("perfect_pull")
-    if u["balance"] >= 1000:
+        if u.get("perfect_pulls", 0) >= 10:
+            grant("perfect_10")
+        if u.get("perfect_pulls", 0) >= 100:
+            grant("perfect_100")
+    bal = u["balance"]
+    if bal >= 100:
+        grant("rich_100")
+    if bal >= 1000:
         grant("rich_1k")
-    if u["balance"] >= 10000:
+    if bal >= 5000:
+        grant("rich_5k")
+    if bal >= 10000:
         grant("rich_10k")
+    if bal >= 25000:
+        grant("rich_25k")
+    if bal >= 50000:
+        grant("rich_50k")
     if u["streak"] >= 3:
         grant("streak_3")
     if u["streak"] >= 7:
         grant("streak_7")
+    if u["streak"] >= 30:
+        grant("streak_30")
+    if u["streak"] >= 100:
+        grant("streak_100")
     return newly
 
 
@@ -257,8 +281,11 @@ async def spin(interaction: discord.Interaction):
     key = {"Low": "low_pulls", "Mid": "mid_pulls", "High": "high_pulls",
            "Elite": "elite_pulls", "DIH": "dih_pulls"}[rarity]
     u = db.get_user(uid)
-    db.update_user(uid, spins_used_today=u["spins_used_today"] + 1,
+    updates = dict(spins_used_today=u["spins_used_today"] + 1,
                    total_spins=u["total_spins"] + 1, **{key: u[key] + 1})
+    if quality == "Perfect":
+        updates["perfect_pulls"] = u.get("perfect_pulls", 0) + 1
+    db.update_user(uid, **updates)
     u = db.update_streak(uid, today_str())
     u = db.get_user(uid)
 
@@ -350,8 +377,10 @@ async def quicksell(interaction: discord.Interaction, rarity: str, quality: str 
             break
     u = db.get_user(uid)
     db.update_user(uid, balance=u["balance"] + earned, total_earned=u["total_earned"] + earned)
-    check_achievements(uid, db.get_user(uid), "", "")
+    newly = check_achievements(uid, db.get_user(uid), "", "")
     await interaction.followup.send(f"💸 Sold **{sold}** ore(s) for **${earned:,}**! New balance: **${u['balance'] + earned:,}**.")
+    if newly:
+        await interaction.followup.send(f"{interaction.user.mention} 🏆 Achievement unlocked!\n" + "\n".join(newly))
 
 
 @bot.tree.command(name="quicksell_all", description="Sell your ENTIRE inventory instantly.")
@@ -371,7 +400,10 @@ async def quicksell_all(interaction: discord.Interaction):
             count += 1
     u = db.get_user(uid)
     db.update_user(uid, balance=u["balance"] + earned, total_earned=u["total_earned"] + earned)
+    newly = check_achievements(uid, db.get_user(uid), "", "")
     await interaction.followup.send(f"💸 Sold **{count}** ores for **${earned:,}**! Balance: **${u['balance'] + earned:,}**.")
+    if newly:
+        await interaction.followup.send(f"{interaction.user.mention} 🏆 Achievement unlocked!\n" + "\n".join(newly))
 
 
 # ----- market -----
@@ -676,6 +708,8 @@ async def market_buy(interaction: discord.Interaction, listing_id: int):
     if ok:
         if seller_id:
             db.grant_achievement(seller_id, "merchant")
+            check_achievements(seller_id, db.get_user(seller_id), "", "")  # silent: money tiers
+        db.grant_achievement(str(interaction.user.id), "customer")
         await interaction.response.send_message(f"✅ {msg}")
     else:
         await interaction.response.send_message(f"❌ {msg}", ephemeral=True)
@@ -853,9 +887,46 @@ async def stats(interaction: discord.Interaction, user: discord.User | None = No
 async def achievements(interaction: discord.Interaction):
     uid = str(interaction.user.id)
     unlocked = set(db.get_achievements(uid))
-    lines = [f"{'✅' if aid in unlocked else '🔒'} **{name}** — {desc}"
-             for aid, (name, desc) in config.ACHIEVEMENTS.items()]
-    await interaction.response.send_message("🏆 **Achievements**\n" + "\n".join(lines))
+    view = AchievementsView(interaction.user.id, unlocked)
+    await interaction.response.send_message(embed=view.make_embed(), view=view)
+
+
+class AchievementsView(discord.ui.View):
+    PER_PAGE = 10
+
+    def __init__(self, owner_id: int, unlocked: set[str]):
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+        self.unlocked = unlocked
+        self.page = 0
+        self.items = list(config.ACHIEVEMENTS.items())
+        self.pages = max(1, (len(self.items) + self.PER_PAGE - 1) // self.PER_PAGE)
+
+    def make_embed(self) -> discord.Embed:
+        chunk = self.items[self.page * self.PER_PAGE:(self.page + 1) * self.PER_PAGE]
+        lines = [f"{'✅' if aid in self.unlocked else '🔒'} **{name}** — {desc}"
+                 for aid, (name, desc) in chunk]
+        embed = discord.Embed(
+            title=f"🏆 Achievements ({len(self.unlocked)}/{len(self.items)})",
+            description="\n".join(lines), color=0xFFD700)
+        embed.set_footer(text=f"Page {self.page + 1}/{self.pages}")
+        return embed
+
+    async def _turn(self, interaction: discord.Interaction, delta: int):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("That's not yours! Run `/achievements` yourself.",
+                                                    ephemeral=True)
+            return
+        self.page = (self.page + delta) % self.pages
+        await interaction.response.edit_message(embed=self.make_embed(), view=self)
+
+    @discord.ui.button(label="", emoji="◀", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._turn(interaction, -1)
+
+    @discord.ui.button(label="", emoji="▶", style=discord.ButtonStyle.secondary)
+    async def forward(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._turn(interaction, 1)
 
 
 @bot.tree.command(name="ores", description="Show all rarities, odds, values, and ores.")

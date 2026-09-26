@@ -32,7 +32,8 @@ def init_db():
             mid_pulls INTEGER NOT NULL DEFAULT 0,
             high_pulls INTEGER NOT NULL DEFAULT 0,
             elite_pulls INTEGER NOT NULL DEFAULT 0,
-            dih_pulls INTEGER NOT NULL DEFAULT 0
+            dih_pulls INTEGER NOT NULL DEFAULT 0,
+            perfect_pulls INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,6 +60,13 @@ def init_db():
             PRIMARY KEY (user_id, ach_id)
         );
         """)
+        # --- migrations for DBs created before these columns existed ---
+        for _col in ("perfect_pulls",):
+            try:
+                conn.execute(f"ALTER TABLE users ADD COLUMN {_col} INTEGER NOT NULL DEFAULT 0")
+            except Exception:
+                pass  # already exists
+        conn.commit()
 
 # ---------- users ----------
 
