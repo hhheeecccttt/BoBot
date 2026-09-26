@@ -164,6 +164,28 @@ def count_inventory(user_id: str) -> int:
         row = conn.execute("SELECT COUNT(*) c FROM inventory WHERE user_id=?", (user_id,)).fetchone()
         return row["c"]
 
+
+def get_ores_overview(user_id: str) -> list[dict]:
+    """Level 1: one row per ore name, all qualities combined: [{ore, count}, ...]"""
+    with _lock, get_conn() as conn:
+        rows = conn.execute(
+            """SELECT ore, COUNT(*) as count FROM inventory
+               WHERE user_id=? GROUP BY ore ORDER BY count DESC""",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_ore_detail(user_id: str, ore: str) -> list[dict]:
+    """Level 2: quality breakdown for one ore: [{rarity, quality, ore, count}, ...]"""
+    with _lock, get_conn() as conn:
+        rows = conn.execute(
+            """SELECT rarity, quality, ore, COUNT(*) as count FROM inventory
+               WHERE user_id=? AND ore=? GROUP BY rarity, quality, ore ORDER BY count DESC""",
+            (user_id, ore),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
 # ---------- market ----------
 
 def market_list(seller_id: str, rarity: str, quality: str, ore: str, price: int) -> int | None:
@@ -183,6 +205,43 @@ def market_list(seller_id: str, rarity: str, quality: str, ore: str, price: int)
 def market_view(limit: int = 10) -> list[dict]:
     with _lock, get_conn() as conn:
         rows = conn.execute("SELECT * FROM market ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def market_ores() -> list[str]:
+    """All ore names currently listed (for the filter dropdown)."""
+    with _lock, get_conn() as conn:
+        rows = conn.execute("SELECT DISTINCT ore FROM market ORDER BY ore").fetchall()
+        return [r["ore"] for r in rows]
+
+
+def market_qualities(ore: str) -> list[str]:
+    with _lock, get_conn() as conn:
+        rows = conn.execute("SELECT DISTINCT quality FROM market WHERE ore=? ORDER BY quality", (ore,)).fetchall()
+        return [r["quality"] for r in rows]
+
+
+def market_browse(ore: str | None = None, quality: str | None = None,
+                  sort: str = "new", limit: int = 10) -> list[dict]:
+    """sort: new | cheapest | expensive | average (closest to mean price)."""
+    clauses, params = [], []
+    if ore:
+        clauses.append("ore = ?")
+        params.append(ore)
+    if quality:
+        clauses.append("quality = ?")
+        params.append(quality)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    with _lock, get_conn() as conn:
+        if sort == "average":
+            avg = conn.execute(f"SELECT AVG(price) a FROM market {where}", params).fetchone()["a"] or 0
+            rows = conn.execute(
+                f"SELECT * FROM market {where} ORDER BY ABS(price - ?) ASC LIMIT ?",
+                (*params, avg, limit)).fetchall()
+        else:
+            order = {"cheapest": "price ASC", "expensive": "price DESC"}.get(sort, "id DESC")
+            rows = conn.execute(f"SELECT * FROM market {where} ORDER BY {order} LIMIT ?",
+                                (*params, limit)).fetchall()
         return [dict(r) for r in rows]
 
 

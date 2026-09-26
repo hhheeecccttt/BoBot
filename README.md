@@ -37,14 +37,14 @@ python3 bot.py
 | `/inventory` | Your ores + dropdown inspector |
 | `/quicksell <rarity> [quality] [ore] [amount]` | Sell matching ores at flat rarity value |
 | `/quicksell_all` | Sell everything |
-| `/market_post` | Pick an ore from a dropdown, set a price in the popup |
-| `/market_view` | Browse newest 10 listings |
+| `/market_list` | Pick an ore from a dropdown, set a price in the popup |
+| `/market_view` | Latest 10 + dropdown filters (ore → quality → cheapest/average/priciest) |
 | `/market_buy <id>` | Buy a listing |
 | `/market_cancel <id>` | Take down your listing |
 | `/stats [user]` | Total spins, pulls per rarity, streak, balance |
 | `/achievements` | Your badges |
 | `/ores` | All rarities, odds, quicksell values, and ore lists |
-| `/leaderboard` | Top 10 richest players |
+| `/baltop` | Top 10 richest players (no pings, shows your rank) |
 | `/help` | List of every command |
 
 ## Values / odds (from your spec)
