@@ -138,7 +138,7 @@ def inspect_text(rarity: str, quality: str, ore: str, count: int) -> str:
     return (
         f"**{ore} ({quality})**\n"
         f"Rarity: **{rarity}**\n"
-        f"Owned: **x{count}/{config.ore_capacity_text(ore)}**\n"
+        f"Owned: **x{count}**\n"
         f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
         f"Quicksell: **${value_each:,}** each (**${value_each * count:,}** for all)\n"
         f"Tip: `/quicksell` to sell, `/market_list` to list it for other players."
@@ -189,8 +189,7 @@ class OreSelect(discord.ui.Select):
         options = []
         for o in ores[:25]:  # Discord limit
             label = f"{o['ore']} x{o['count']}"[:100]
-            desc = f"holds up to {config.ore_capacity_text(o['ore'])}"[:100]
-            options.append(discord.SelectOption(label=label, description=desc, value=o["ore"]))
+            options.append(discord.SelectOption(label=label, value=o["ore"]))
         super().__init__(placeholder="Choose which ore page to open…", options=options)
 
     async def callback(self, interaction: discord.Interaction):
@@ -202,7 +201,7 @@ class OreSelect(discord.ui.Select):
         if not stacks:
             await interaction.response.send_message("Nothing there anymore.", ephemeral=True)
             return
-        lines = [f"**{s['ore']} ({s['quality']})** x{s['count']}/{config.ore_capacity_text(ore)}"
+        lines = [f"**{s['ore']} ({s['quality']})** x{s['count']}"
                  for s in stacks]
         embed = discord.Embed(title=f"⛏️ {ore}",
                               description="\n".join(lines), color=0x00BCD4)
@@ -270,6 +269,7 @@ async def spin(interaction: discord.Interaction):
 
     embed = discord.Embed(
         title=f"{ore} ({quality})!",
+        description=f"({rarity})",
         color=config.RARITIES[rarity]["color"],
     )
     embed.add_field(name="📊 Odds", value=f"{one_in} chance", inline=True)
@@ -304,7 +304,7 @@ async def inventory(interaction: discord.Interaction):
         return
     total = sum(o["count"] for o in ores)
     desc = "\n".join(
-        f"**{o['ore']}** x{o['count']}/{config.ore_capacity_text(o['ore'])}"
+        f"**{o['ore']}** x{o['count']}"
         for o in ores[:25]
     )
     embed = discord.Embed(title=f"🎒 {interaction.user.display_name}'s Inventory ({total} ores)",
@@ -410,8 +410,7 @@ class MarketSellSelect(discord.ui.Select):
         options = []
         for o in ores[:25]:  # Discord limit
             label = f"{o['ore']} x{o['count']}"[:100]
-            desc = f"holds up to {config.ore_capacity_text(o['ore'])}"[:100]
-            options.append(discord.SelectOption(label=label, description=desc, value=o["ore"]))
+            options.append(discord.SelectOption(label=label, value=o["ore"]))
         super().__init__(placeholder="Choose which ore to list…", options=options)
 
     async def callback(self, interaction: discord.Interaction):
@@ -463,7 +462,7 @@ class ListOrePageView(discord.ui.View):
         lines = []
         for s in self.stacks:
             mark = "▶ " if f"{s['rarity']}|{s['quality']}" == self.selected else ""
-            lines.append(f"{mark}**{s['ore']} ({s['quality']})** x{s['count']}/{config.ore_capacity_text(self.ore)}")
+            lines.append(f"{mark}**{s['ore']} ({s['quality']})** x{s['count']}")
         return discord.Embed(title=f"📦 List: {self.ore}", description="\n".join(lines),
                              color=0x4CAF50)
 
@@ -490,7 +489,7 @@ async def market_list(interaction: discord.Interaction):
     if not ores:
         await interaction.response.send_message("🎒 Your inventory is empty! Use `/spin` first.", ephemeral=True)
         return
-    desc = "\n".join(f"**{o['ore']}** x{o['count']}/{config.ore_capacity_text(o['ore'])}"
+    desc = "\n".join(f"**{o['ore']}** x{o['count']}"
                      for o in ores[:25])
     embed = discord.Embed(title="📦 List an ore", description=desc, color=0x4CAF50)
     await interaction.response.send_message(
@@ -661,12 +660,11 @@ async def ores(interaction: discord.Interaction):
     embed = discord.Embed(title="⛏️ Ores & Odds", color=0xFF9800)
     for r, ri in config.RARITIES.items():
         ore_list = ", ".join(config.ORES[r])
-        # rarest combo for this rarity (with Perfect quality) for the headline odds
-        pct, one_in = config.combined_odds(r, "Perfect")
+        one_in = round(100.0 / ri["chance"]) if ri["chance"] > 0 else 0
         embed.add_field(
-            name=f"{ri['emoji']} {r} — {ri['chance']}%",
+            name=f"{ri['emoji']} {r}",
             value=f"Ores: **{ore_list}**\nQuicksell: **${ri['value']:,}**\n"
-                  f"Rarest ({r} Perfect): **{pct:.4g}%** ({one_in})",
+                  f"Odds: **{ri['chance']}%** (1 in {one_in:,} chance)",
             inline=False,
         )
     q_lines = []

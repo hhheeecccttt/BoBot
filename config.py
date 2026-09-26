@@ -36,16 +36,6 @@ ORES = {
     "DIH":   ["Painite", "DIH Ore"],
 }
 
-# --- Inventory capacity (display only — spins are never blocked) ---
-# None = infinite. Set per-ore limits like {"Copper": 100} if you ever want caps.
-DEFAULT_ORE_LIMIT = None
-ORE_LIMITS: dict[str, int | None] = {}
-
-
-def ore_capacity_text(ore: str) -> str:
-    lim = ORE_LIMITS.get(ore, DEFAULT_ORE_LIMIT)
-    return "∞" if lim is None else f"{lim:,}"
-
 # --- Streaks ---
 # Your idea: "need to spin at least 3x days in a row to reach normal spin %"
 # Implemented as: streak = consecutive days with >=1 spin.
