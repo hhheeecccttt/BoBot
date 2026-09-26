@@ -33,7 +33,12 @@ def init_db():
             high_pulls INTEGER NOT NULL DEFAULT 0,
             elite_pulls INTEGER NOT NULL DEFAULT 0,
             dih_pulls INTEGER NOT NULL DEFAULT 0,
-            perfect_pulls INTEGER NOT NULL DEFAULT 0
+            perfect_pulls INTEGER NOT NULL DEFAULT 0,
+            buy_count INTEGER NOT NULL DEFAULT 0,
+            sell_count INTEGER NOT NULL DEFAULT 0,
+            inv_public INTEGER NOT NULL DEFAULT 0,
+            ach_public INTEGER NOT NULL DEFAULT 0,
+            stats_public INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -41,6 +46,7 @@ def init_db():
             rarity TEXT NOT NULL,
             quality TEXT NOT NULL,
             ore TEXT NOT NULL,
+            origin TEXT NOT NULL DEFAULT 'spin',
             acquired_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_inv_user ON inventory(user_id);
@@ -61,9 +67,17 @@ def init_db():
         );
         """)
         # --- migrations for DBs created before these columns existed ---
-        for _col in ("perfect_pulls",):
+        for _table, _col, _ddl in (
+            ("users", "perfect_pulls", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "buy_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "sell_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "inv_public", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "ach_public", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "stats_public", "INTEGER NOT NULL DEFAULT 0"),
+            ("inventory", "origin", "TEXT NOT NULL DEFAULT 'spin'"),
+        ):
             try:
-                conn.execute(f"ALTER TABLE users ADD COLUMN {_col} INTEGER NOT NULL DEFAULT 0")
+                conn.execute(f"ALTER TABLE {_table} ADD COLUMN {_col} {_ddl}")
             except Exception:
                 pass  # already exists
         conn.commit()
@@ -121,14 +135,29 @@ def update_streak(user_id: str, today: str) -> dict:
 
 # ---------- inventory ----------
 
-def add_item(user_id: str, rarity: str, quality: str, ore: str) -> int:
+def add_item(user_id: str, rarity: str, quality: str, ore: str, origin: str = "spin") -> int:
     with _lock, get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO inventory (user_id, rarity, quality, ore) VALUES (?,?,?,?)",
-            (user_id, rarity, quality, ore),
+            "INSERT INTO inventory (user_id, rarity, quality, ore, origin) VALUES (?,?,?,?,?)",
+            (user_id, rarity, quality, ore, origin),
         )
         conn.commit()
         return cur.lastrowid
+
+
+def take_one_item(user_id: str, rarity: str, quality: str, ore: str):
+    """Remove a single matching item. Returns the full row dict or None (for trades)."""
+    with _lock, get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM inventory WHERE user_id=? AND rarity=? AND quality=? AND ore=? ORDER BY id LIMIT 1",
+            (user_id, rarity, quality, ore),
+        ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        conn.execute("DELETE FROM inventory WHERE id=?", (item["id"],))
+        conn.commit()
+        return item
 
 
 def remove_one_item(user_id: str, rarity: str, quality: str, ore: str):
@@ -185,15 +214,77 @@ def get_ores_overview(user_id: str) -> list[dict]:
                  "rarities": (r["rarities"] or "").split(",")} for r in rows]
 
 
-def get_ore_detail(user_id: str, ore: str) -> list[dict]:
-    """Level 2: quality breakdown for one ore: [{rarity, quality, ore, count}, ...]"""
+def get_ores_by_quality(user_id: str, quality: str) -> list[dict]:
+    """Level 1 filtered: ores the user owns in one quality: [{ore, count, rarities}, ...]"""
     with _lock, get_conn() as conn:
         rows = conn.execute(
-            """SELECT rarity, quality, ore, COUNT(*) as count FROM inventory
-               WHERE user_id=? AND ore=? GROUP BY rarity, quality, ore ORDER BY count DESC""",
-            (user_id, ore),
+            """SELECT ore, COUNT(*) as count, GROUP_CONCAT(DISTINCT rarity) as rarities
+               FROM inventory WHERE user_id=? AND quality=? GROUP BY ore ORDER BY count DESC""",
+            (user_id, quality),
+        ).fetchall()
+        return [{"ore": r["ore"], "count": r["count"],
+                 "rarities": (r["rarities"] or "").split(",")} for r in rows]
+
+
+def get_ore_detail(user_id: str, ore: str, quality: str | None = None) -> list[dict]:
+    """Level 2: quality breakdown for one ore: [{rarity, quality, ore, count}, ...]
+    Sorted Chipped -> Scratched -> Perfect. Optional quality filter."""
+    import config as _cfg
+    order = " ".join(f"WHEN '{q}' THEN {i}" for i, q in enumerate(_cfg.QUALITIES))
+    clauses, params = ["user_id = ?", "ore = ?"], [user_id, ore]
+    if quality:
+        clauses.append("quality = ?")
+        params.append(quality)
+    with _lock, get_conn() as conn:
+        rows = conn.execute(
+            f"""SELECT rarity, quality, ore, COUNT(*) as count FROM inventory
+               WHERE {' AND '.join(clauses)} GROUP BY rarity, quality, ore
+               ORDER BY CASE quality {order} END""",
+            params,
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def owns_all_ores(user_id: str, ore_names: list[str]) -> bool:
+    """True if the user currently holds at least one of every listed ore (collectors)."""
+    if not ore_names:
+        return False
+    with _lock, get_conn() as conn:
+        rows = conn.execute("SELECT DISTINCT ore FROM inventory WHERE user_id=?", (user_id,)).fetchall()
+        owned = {r["ore"] for r in rows}
+        return all(o in owned for o in ore_names)
+
+
+def origin_counts(user_id: str, rarity: str, quality: str, ore: str) -> dict:
+    """How a stack was obtained: {'spin': n, 'market': m, ...}"""
+    with _lock, get_conn() as conn:
+        rows = conn.execute(
+            """SELECT origin, COUNT(*) as count FROM inventory
+               WHERE user_id=? AND rarity=? AND quality=? AND ore=?
+               GROUP BY origin""",
+            (user_id, rarity, quality, ore),
+        ).fetchall()
+        return {r["origin"]: r["count"] for r in rows}
+
+
+def inventory_value(user_id: str, ore: str | None = None, quality: str | None = None) -> tuple[int, int]:
+    """(total count, total quicksell value), optionally for one ore / quality. Values via config."""
+    import config as _cfg
+    clauses, params = ["user_id = ?"], [user_id]
+    if ore:
+        clauses.append("ore = ?")
+        params.append(ore)
+    if quality:
+        clauses.append("quality = ?")
+        params.append(quality)
+    with _lock, get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT rarity, COUNT(*) as count FROM inventory WHERE {' AND '.join(clauses)} GROUP BY rarity",
+            params,
+        ).fetchall()
+        total_n = sum(r["count"] for r in rows)
+        total_v = sum(_cfg.quicksell_value(r["rarity"]) * r["count"] for r in rows)
+        return total_n, total_v
 
 # ---------- market ----------
 
@@ -284,12 +375,13 @@ def market_buy(listing_id: int, buyer_id: str):
             return False, f"You need ${listing['price']:,} but only have ${buyer.get('balance',0):,}."
         seller = conn.execute("SELECT * FROM users WHERE user_id=?", (listing["seller_id"],)).fetchone()
         # transfer money
-        conn.execute("UPDATE users SET balance = balance - ? WHERE user_id=?", (listing["price"], buyer_id))
-        conn.execute("UPDATE users SET balance = balance + ?, total_earned = total_earned + ? WHERE user_id=?",
+        conn.execute("UPDATE users SET balance = balance - ?, buy_count = buy_count + 1 WHERE user_id=?",
+                     (listing["price"], buyer_id))
+        conn.execute("UPDATE users SET balance = balance + ?, total_earned = total_earned + ?, sell_count = sell_count + 1 WHERE user_id=?",
                      (listing["price"], listing["price"], listing["seller_id"]))
-        # transfer item
-        conn.execute("INSERT INTO inventory (user_id, rarity, quality, ore) VALUES (?,?,?,?)",
-                     (buyer_id, listing["rarity"], listing["quality"], listing["ore"]))
+        # transfer item (marked as market-bought for inspect provenance)
+        conn.execute("INSERT INTO inventory (user_id, rarity, quality, ore, origin) VALUES (?,?,?,?,?)",
+                     (buyer_id, listing["rarity"], listing["quality"], listing["ore"], "market"))
         conn.execute("DELETE FROM market WHERE id=?", (listing_id,))
         conn.commit()
         return True, f"You bought **{listing['quality']} {listing['ore']}** ({listing['rarity']}) for **${listing['price']:,}**!"

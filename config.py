@@ -9,13 +9,13 @@ from datetime import timezone
 SPINS_PER_DAY = 3
 RESET_TIMEZONE = timezone.utc  # daily reset at 00:00 UTC
 
-# Rarity: (chance %, quicksell value $, color for embed)
+# Rarity: (chance %, quicksell value $, color for embed, dot emoji for spin line)
 RARITIES = {
-    "Low":     {"chance": 70.0, "value": 10,    "color": 0x9E9E9E, "emoji": "🪨"},
-    "Mid":     {"chance": 25.0, "value": 28,    "color": 0x4CAF50, "emoji": "💚"},
-    "High":    {"chance": 4.0,  "value": 175,   "color": 0x2196F3, "emoji": "💎"},
-    "Elite":   {"chance": 0.9,  "value": 778,   "color": 0x9C27B0, "emoji": "👑"},
-    "DIH":     {"chance": 0.1,  "value": 28000, "color": 0xFFD700, "emoji": "🌟"},
+    "Low":     {"chance": 70.0, "value": 10,    "color": 0x9E9E9E, "emoji": "🪨", "dot": "⚪"},
+    "Mid":     {"chance": 25.0, "value": 28,    "color": 0x4CAF50, "emoji": "💚", "dot": "🟢"},
+    "High":    {"chance": 4.0,  "value": 175,   "color": 0x2196F3, "emoji": "💎", "dot": "🔵"},
+    "Elite":   {"chance": 0.9,  "value": 778,   "color": 0x9C27B0, "emoji": "👑", "dot": "🟣"},
+    "DIH":     {"chance": 0.1,  "value": 28000, "color": 0xFFD700, "emoji": "🌟", "dot": "🟡"},
 }
 
 # Quality: chance %
@@ -63,14 +63,40 @@ ACHIEVEMENTS = {
     "rich_1k":      ("First Bag", "Reach a $1,000 balance"),
     "rich_5k":      ("Kinda Financially Stable", "Reach a $5,000 balance"),
     "rich_10k":     ("Middle Class", "Reach a $10,000 balance"),
-    "rich_25k":     ("Upper-Middle Class", "Reach a $25,000 balance"),
+    "rich_25k":     ("Upper Class", "Reach a $25,000 balance"),
     "rich_50k":     ("Rich", "Reach a $50,000 balance"),
+    "rich_100k":    ("Upper-Middle Class", "Reach a $100,000 balance"),
+    "rich_250k":    ("Higher Echelon Middle Class", "Reach a $250,000 balance"),
+    "rich_500k":    ("Quite Wealthy", "Reach a $500,000 balance"),
+    "rich_1m":      ("Millionaire", "Reach a $1,000,000 balance"),
     "streak_3":     ("Starting Off", "Reach a 3-day streak"),
     "streak_7":     ("Consistent", "Reach a 7-day streak"),
     "streak_30":    ("Addicted", "Reach a 30-day streak"),
     "streak_100":   ("Geeked Out", "Reach a 100-day streak"),
     "merchant":     ("Merchant", "Sell something on the player market"),
     "customer":     ("Customer", "Buy something on the player market"),
+    "merchant_10":  ("Experienced Merchant", "Sell 10 ores on the player market"),
+    "customer_10":  ("Regular Customer", "Buy 10 ores on the player market"),
+    "investor":     ("Investor", "Buy a DIH Tier ore from the player market"),
+    "collector_low":   ("Rookie Collector", "Collect every Low Tier ore"),
+    "collector_mid":   ("Amateur Collector", "Collect every Mid Tier ore"),
+    "collector_high":  ("Experienced Collector", "Collect every High Tier ore"),
+    "collector_elite": ("Pro Collector", "Collect every Elite Tier ore"),
+    "collector_dih":   ("Top Collector", "Collect every DIH Tier ore"),
+    "collector_all":   ("Semi-Maxxed Collection", "Collect every ore"),
+}
+
+# Category emoji shown in front of each achievement (organized view)
+ACH_CATEGORIES = {
+    "first_spin": "🎰", "spins_10": "🎰", "spins_100": "🎰", "spins_1000": "🎰", "spins_10000": "🎰",
+    "elite_pull": "🍀", "dih_pull": "🍀", "dih_10": "🍀", "dih_100": "🍀",
+    "perfect_pull": "🍀", "perfect_10": "🍀", "perfect_100": "🍀",
+    "collector_low": "🗂️", "collector_mid": "🗂️", "collector_high": "🗂️",
+    "collector_elite": "🗂️", "collector_dih": "🗂️", "collector_all": "🗂️",
+    "rich_100": "💰", "rich_1k": "💰", "rich_5k": "💰", "rich_10k": "💰", "rich_25k": "💰",
+    "rich_50k": "💰", "rich_100k": "💰", "rich_250k": "💰", "rich_500k": "💰", "rich_1m": "💰",
+    "streak_3": "🔥", "streak_7": "🔥", "streak_30": "🔥", "streak_100": "🔥",
+    "merchant": "🏪", "customer": "🏪", "merchant_10": "🏪", "customer_10": "🏪", "investor": "🏪",
 }
 
 

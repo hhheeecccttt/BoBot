@@ -32,20 +32,22 @@ python3 bot.py
 
 | Command | What it does |
 |---|---|
-| `/spin` | Roll rarity + quality + ore. Shows % and "1 in X". Has a 💸 quicksell button. 3/day, resets 00:00 UTC |
+| `/spin` | Roll rarity + quality + ore. Shows "1 in X". Has a 💸 quicksell button. 3/day, resets 00:00 UTC |
 | `/balance` | Your $ |
-| `/inventory` | Your ores + dropdown inspector |
+| `/inventory [@user]` | Your ores (private unless you set public) + ore pages, quality filter, totals |
 | `/quicksell <rarity> [quality] [ore] [amount]` | Sell matching ores at flat rarity value |
 | `/quicksell_all` | Sell everything |
 | `/market_list` | Pick an ore from a dropdown, set a price in the popup |
-| `/market_view` | Latest 10 + dropdown filters (ore → quality → cheapest/average/priciest) |
-| `/market_buy <id>` | Buy a listing |
+| `/market_view` | Latest + dropdown filters (ore → quality → cheapest/average/priciest), pages, inspect + Buy button |
 | `/market_cancel` | Your latest 10 + dropdowns (ore → quality → pick + button) |
 | `/market_cancel_all` | Cancel every listing, items return to you |
-| `/stats [user]` | Total spins, pulls per rarity, streak, balance |
-| `/achievements` | Your badges |
-| `/ores` | All rarities, odds, quicksell values, and ore lists |
+| `/trade @player` | Trade ores 1-for-1 (both accept) |
+| `/stats [@user]` | Spins, pulls, streak, balance, achievement count |
+| `/achievements` | Your badges (paged, filterable) |
+| `/odds` | Rarities, odds, quicksell values |
+| `/ores` | Browse every ore tier by tier |
 | `/baltop` | Top 10 richest players (no pings, shows your rank) |
+| `/settings` | Privacy: inventory / achievements / stats public or private |
 | `/help` | List of every command |
 
 ## Values / odds (from your spec)
