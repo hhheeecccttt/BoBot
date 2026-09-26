@@ -131,6 +131,12 @@ class SpinView(discord.ui.View):
 
 # ---------- inventory (two levels: ore page -> quality stacks) ----------
 
+def ore_tier_label(ore: str, rarities: list[str]) -> str:
+    """Emerald + [Mid] -> Emerald (Mid Tier)."""
+    tiers = ", ".join(config.tier_name(r) for r in sorted(rarities, key=config.tier_index))
+    return f"{ore} ({tiers})"
+
+
 def inspect_text(rarity: str, quality: str, ore: str, count: int) -> str:
     """Quality first, then odds (% + 1-in), quicksell, tip."""
     value_each = config.quicksell_value(rarity)
@@ -187,7 +193,7 @@ class OreSelect(discord.ui.Select):
         self.owner_id = owner_id
         options = []
         for o in ores[:25]:  # Discord limit
-            label = f"{o['ore']} x{o['count']}"[:100]
+            label = f"{ore_tier_label(o['ore'], o['rarities'])} x{o['count']}"[:100]
             options.append(discord.SelectOption(label=label, value=o["ore"]))
         super().__init__(placeholder="Choose which ore page to open…", options=options)
 
@@ -303,7 +309,7 @@ async def inventory(interaction: discord.Interaction):
         return
     total = sum(o["count"] for o in ores)
     desc = "\n".join(
-        f"**{o['ore']}** x{o['count']}"
+        f"**{ore_tier_label(o['ore'], o['rarities'])}** x{o['count']}"
         for o in ores[:25]
     )
     embed = discord.Embed(title=f"🎒 {interaction.user.display_name}'s Inventory ({total} ores)",
@@ -408,7 +414,7 @@ class MarketSellSelect(discord.ui.Select):
         self.owner_id = owner_id
         options = []
         for o in ores[:25]:  # Discord limit
-            label = f"{o['ore']} x{o['count']}"[:100]
+            label = f"{ore_tier_label(o['ore'], o['rarities'])} x{o['count']}"[:100]
             options.append(discord.SelectOption(label=label, value=o["ore"]))
         super().__init__(placeholder="Choose which ore to list…", options=options)
 
@@ -488,7 +494,7 @@ async def market_list(interaction: discord.Interaction):
     if not ores:
         await interaction.response.send_message("🎒 Your inventory is empty! Use `/spin` first.", ephemeral=True)
         return
-    desc = "\n".join(f"**{o['ore']}** x{o['count']}"
+    desc = "\n".join(f"**{ore_tier_label(o['ore'], o['rarities'])}** x{o['count']}"
                      for o in ores[:25])
     embed = discord.Embed(title="📦 List an ore", description=desc, color=0x4CAF50)
     await interaction.response.send_message(
@@ -499,16 +505,19 @@ async def format_listings(interaction: discord.Interaction, listings: list[dict]
     lines = []
     for l in listings:
         seller = await display_name(interaction, l["seller_id"])
-        lines.append(f"`{l['id']}` **{l['quality']} {l['ore']}** ({config.tier_name(l['rarity'])}) — **${l['price']:,}** — {seller}")
+        lines.append(f"`{l['id']}` **{l['ore']}** ({config.tier_name(l['rarity'])}) — **${l['price']:,}** — {seller}")
     return lines
 
 
 class MarketOreFilterSelect(discord.ui.Select):
     def __init__(self, owner_id: int):
         self.owner_id = owner_id
+        ores = db.market_ores_with_rarity()
+        # lowest tier first
+        ores.sort(key=lambda o: min(config.tier_index(r) for r in o["rarities"]))
         options = []
-        for o in db.market_ores_with_rarity()[:25]:
-            tiers = ", ".join(config.tier_name(r) for r in o["rarities"])
+        for o in ores[:25]:
+            tiers = ", ".join(config.tier_name(r) for r in sorted(o["rarities"], key=config.tier_index))
             options.append(discord.SelectOption(
                 label=f"{o['ore']} ({tiers})"[:100], value=o["ore"]))
         super().__init__(placeholder="Filter by ore…", options=options or [
@@ -527,7 +536,7 @@ class MarketOreFilterSelect(discord.ui.Select):
                               description="\n".join(lines) if lines else "Sold out!",
                               color=0x9C27B0)
         await interaction.response.edit_message(
-            embed=embed, view=MarketBrowser(self.owner_id, ore=ore))
+            embed=embed, view=MarketBrowser(self.owner_id, ore=ore, listings=listings))
 
 
 class MarketQualityFilterSelect(discord.ui.Select):
@@ -552,7 +561,8 @@ class MarketQualityFilterSelect(discord.ui.Select):
                               description="\n".join(lines) if lines else "Sold out!",
                               color=0x9C27B0)
         await interaction.response.edit_message(
-            embed=embed, view=MarketBrowser(self.owner_id, ore=self.ore, quality=quality))
+            embed=embed, view=MarketBrowser(self.owner_id, ore=self.ore,
+                                            quality=quality, listings=listings))
 
 
 class MarketSortSelect(discord.ui.Select):
@@ -575,7 +585,7 @@ class MarketSortSelect(discord.ui.Select):
         lines = await format_listings(interaction, listings)
         label = {"cheapest": "cheapest", "average": "closest to average",
                  "expensive": "most expensive"}[sort]
-        embed = discord.Embed(title=f"🏪 {self.ore} ({self.quality}) — {label} 10",
+        embed = discord.Embed(title=f"🏪 {self.ore} ({self.quality}) — {label}",
                               description="\n".join(lines) if lines else "Sold out!",
                               color=0x9C27B0)
         await interaction.response.edit_message(
@@ -590,8 +600,8 @@ class MarketListingInspectSelect(discord.ui.Select):
         self.owner_id = owner_id
         options = []
         for l in listings[:25]:
-            label = f"{l['quality']} {l['ore']} — ${l['price']:,}"[:100]
-            desc = f"{config.tier_name(l['rarity'])} • ID {l['id']}"[:100]
+            label = f"{l['ore']} — ${l['price']:,}"[:100]
+            desc = f"{l['quality']} • {config.tier_name(l['rarity'])} • ID {l['id']}"[:100]
             options.append(discord.SelectOption(label=label, description=desc,
                                                 value=str(l["id"])))
         super().__init__(placeholder="Inspect a listing…", options=options or [
@@ -611,7 +621,8 @@ class MarketListingInspectSelect(discord.ui.Select):
         quick = config.quicksell_value(listing["rarity"])
         pct, one_in = config.combined_odds(listing["rarity"], listing["quality"])
         await interaction.response.send_message(
-            f"**{listing['quality']} {listing['ore']} ({config.tier_name(listing['rarity'])})** — **${listing['price']:,}**\n"
+            f"**{listing['ore']} ({config.tier_name(listing['rarity'])})** — **${listing['price']:,}**\n"
+            f"Quality: **{listing['quality']}**\n"
             f"Seller: **{seller}**\n"
             f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
             f"Quicksell value: **${quick:,}**\n"
@@ -621,7 +632,7 @@ class MarketListingInspectSelect(discord.ui.Select):
 
 
 class MarketBrowser(discord.ui.View):
-    """Stage-based market browser: ore filter -> quality filter -> sort -> inspect."""
+    """Stage-based market browser: ore filter -> quality filter -> sort, inspect at every stage."""
 
     def __init__(self, owner_id: int, ore: str | None = None, quality: str | None = None,
                  listings: list[dict] | None = None):
@@ -632,8 +643,8 @@ class MarketBrowser(discord.ui.View):
             self.add_item(MarketQualityFilterSelect(owner_id, ore))
         else:
             self.add_item(MarketSortSelect(owner_id, ore, quality))
-            if listings:
-                self.add_item(MarketListingInspectSelect(owner_id, listings))
+        if listings:
+            self.add_item(MarketListingInspectSelect(owner_id, listings))
 
 
 @bot.tree.command(name="market_view", description="Browse the player market (latest 10 + filters).")
@@ -647,8 +658,9 @@ async def market_view(interaction: discord.Interaction):
     embed = discord.Embed(title="🏪 Player Market — latest 10",
                           description="\n".join(lines) if lines else "Sold out!",
                           color=0x9C27B0)
-    embed.set_footer(text="Buy with /market_buy <id> • use the dropdown to filter")
-    await interaction.followup.send(embed=embed, view=MarketBrowser(interaction.user.id))
+    embed.set_footer(text="Buy with /market_buy <id> • use the dropdowns to filter & inspect")
+    await interaction.followup.send(embed=embed, view=MarketBrowser(interaction.user.id,
+                                                                    listings=listings))
 
 
 @bot.tree.command(name="market_buy", description="Buy a listing by ID.")

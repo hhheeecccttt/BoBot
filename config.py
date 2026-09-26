@@ -85,3 +85,8 @@ def quicksell_value(rarity: str) -> int:
 def tier_name(rarity: str) -> str:
     """Display name: Low -> Low Tier. Internal keys stay short (DB-safe)."""
     return f"{rarity} Tier"
+
+
+def tier_index(rarity: str) -> int:
+    """0 = lowest tier. Used to sort dropdowns low -> high."""
+    return list(RARITIES.keys()).index(rarity)

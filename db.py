@@ -166,14 +166,15 @@ def count_inventory(user_id: str) -> int:
 
 
 def get_ores_overview(user_id: str) -> list[dict]:
-    """Level 1: one row per ore name, all qualities combined: [{ore, count}, ...]"""
+    """Level 1: one row per ore name, all qualities combined: [{ore, count, rarities}, ...]"""
     with _lock, get_conn() as conn:
         rows = conn.execute(
-            """SELECT ore, COUNT(*) as count FROM inventory
-               WHERE user_id=? GROUP BY ore ORDER BY count DESC""",
+            """SELECT ore, COUNT(*) as count, GROUP_CONCAT(DISTINCT rarity) as rarities
+               FROM inventory WHERE user_id=? GROUP BY ore ORDER BY count DESC""",
             (user_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [{"ore": r["ore"], "count": r["count"],
+                 "rarities": (r["rarities"] or "").split(",")} for r in rows]
 
 
 def get_ore_detail(user_id: str, ore: str) -> list[dict]:
