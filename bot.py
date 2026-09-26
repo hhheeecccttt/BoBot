@@ -579,13 +579,52 @@ class MarketSortSelect(discord.ui.Select):
                               description="\n".join(lines) if lines else "Sold out!",
                               color=0x9C27B0)
         await interaction.response.edit_message(
-            embed=embed, view=MarketBrowser(self.owner_id, ore=self.ore, quality=self.quality))
+            embed=embed, view=MarketBrowser(self.owner_id, ore=self.ore,
+                                            quality=self.quality, listings=listings))
+
+
+class MarketListingInspectSelect(discord.ui.Select):
+    """Pick one of the shown listings to inspect it."""
+
+    def __init__(self, owner_id: int, listings: list[dict]):
+        self.owner_id = owner_id
+        options = []
+        for l in listings[:25]:
+            label = f"{l['quality']} {l['ore']} — ${l['price']:,}"[:100]
+            desc = f"{config.tier_name(l['rarity'])} • ID {l['id']}"[:100]
+            options.append(discord.SelectOption(label=label, description=desc,
+                                                value=str(l["id"])))
+        super().__init__(placeholder="Inspect a listing…", options=options or [
+            discord.SelectOption(label="(none)", value="none")])
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Use `/market_view` to browse yourself!", ephemeral=True)
+            return
+        if self.values[0] == "none":
+            return
+        listing = db.market_get(int(self.values[0]))
+        if listing is None:
+            await interaction.response.send_message("❌ That listing just sold!", ephemeral=True)
+            return
+        seller = await display_name(interaction, listing["seller_id"])
+        quick = config.quicksell_value(listing["rarity"])
+        pct, one_in = config.combined_odds(listing["rarity"], listing["quality"])
+        await interaction.response.send_message(
+            f"**{listing['quality']} {listing['ore']} ({config.tier_name(listing['rarity'])})** — **${listing['price']:,}**\n"
+            f"Seller: **{seller}**\n"
+            f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
+            f"Quicksell value: **${quick:,}**\n"
+            f"Buy it with `/market_buy {listing['id']}`",
+            ephemeral=True,
+        )
 
 
 class MarketBrowser(discord.ui.View):
-    """Stage-based market browser: ore filter -> quality filter -> sort."""
+    """Stage-based market browser: ore filter -> quality filter -> sort -> inspect."""
 
-    def __init__(self, owner_id: int, ore: str | None = None, quality: str | None = None):
+    def __init__(self, owner_id: int, ore: str | None = None, quality: str | None = None,
+                 listings: list[dict] | None = None):
         super().__init__(timeout=300)
         if ore is None:
             self.add_item(MarketOreFilterSelect(owner_id))
@@ -593,6 +632,8 @@ class MarketBrowser(discord.ui.View):
             self.add_item(MarketQualityFilterSelect(owner_id, ore))
         else:
             self.add_item(MarketSortSelect(owner_id, ore, quality))
+            if listings:
+                self.add_item(MarketListingInspectSelect(owner_id, listings))
 
 
 @bot.tree.command(name="market_view", description="Browse the player market (latest 10 + filters).")

@@ -208,6 +208,12 @@ def market_view(limit: int = 10) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def market_get(listing_id: int) -> dict | None:
+    with _lock, get_conn() as conn:
+        row = conn.execute("SELECT * FROM market WHERE id=?", (listing_id,)).fetchone()
+        return dict(row) if row else None
+
+
 def market_ores() -> list[str]:
     """All ore names currently listed (for the filter dropdown)."""
     with _lock, get_conn() as conn:
