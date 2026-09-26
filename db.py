@@ -215,6 +215,16 @@ def market_ores() -> list[str]:
         return [r["ore"] for r in rows]
 
 
+def market_ores_with_rarity() -> list[dict]:
+    """One row per ore with its rarities: [{ore, rarities: [..]}, ...]"""
+    with _lock, get_conn() as conn:
+        rows = conn.execute("SELECT DISTINCT ore, rarity FROM market ORDER BY ore, rarity").fetchall()
+        grouped: dict[str, list[str]] = {}
+        for r in rows:
+            grouped.setdefault(r["ore"], []).append(r["rarity"])
+        return [{"ore": ore, "rarities": rars} for ore, rars in grouped.items()]
+
+
 def market_qualities(ore: str) -> list[str]:
     with _lock, get_conn() as conn:
         rows = conn.execute("SELECT DISTINCT quality FROM market WHERE ore=? ORDER BY quality", (ore,)).fetchall()

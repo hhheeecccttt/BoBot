@@ -506,8 +506,11 @@ async def format_listings(interaction: discord.Interaction, listings: list[dict]
 class MarketOreFilterSelect(discord.ui.Select):
     def __init__(self, owner_id: int):
         self.owner_id = owner_id
-        ores = db.market_ores()
-        options = [discord.SelectOption(label=o, value=o) for o in ores[:25]]
+        options = []
+        for o in db.market_ores_with_rarity()[:25]:
+            tiers = ", ".join(config.tier_name(r) for r in o["rarities"])
+            options.append(discord.SelectOption(
+                label=f"{o['ore']} ({tiers})"[:100], value=o["ore"]))
         super().__init__(placeholder="Filter by ore…", options=options or [
             discord.SelectOption(label="(no listings)", value="none")])
 
