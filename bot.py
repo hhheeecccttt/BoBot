@@ -307,6 +307,8 @@ async def inventory(interaction: discord.Interaction):
     if not ores:
         await interaction.response.send_message("🎒 Your inventory is empty! Use `/spin` to roll some ores.")
         return
+    # lowest tier first
+    ores.sort(key=lambda o: (min(config.tier_index(r) for r in o["rarities"]), -o["count"]))
     total = sum(o["count"] for o in ores)
     desc = "\n".join(
         f"**{ore_tier_label(o['ore'], o['rarities'])}** x{o['count']}"
@@ -494,6 +496,8 @@ async def market_list(interaction: discord.Interaction):
     if not ores:
         await interaction.response.send_message("🎒 Your inventory is empty! Use `/spin` first.", ephemeral=True)
         return
+    # lowest tier first
+    ores.sort(key=lambda o: (min(config.tier_index(r) for r in o["rarities"]), -o["count"]))
     desc = "\n".join(f"**{ore_tier_label(o['ore'], o['rarities'])}** x{o['count']}"
                      for o in ores[:25])
     embed = discord.Embed(title="📦 List an ore", description=desc, color=0x4CAF50)
