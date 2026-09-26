@@ -677,10 +677,154 @@ async def market_buy(interaction: discord.Interaction, listing_id: int):
         await interaction.response.send_message(f"❌ {msg}", ephemeral=True)
 
 
-@bot.tree.command(name="market_cancel", description="Cancel your listing (item returns to you).")
-async def market_cancel(interaction: discord.Interaction, listing_id: int):
-    ok, msg = db.market_cancel(listing_id, str(interaction.user.id))
-    await interaction.response.send_message(("✅ " if ok else "❌ ") + msg, ephemeral=not ok)
+@bot.tree.command(name="market_cancel", description="Cancel your listings (pick from dropdowns).")
+async def market_cancel(interaction: discord.Interaction):
+    uid = str(interaction.user.id)
+    listings = db.market_by_seller(uid, limit=10)
+    if not listings:
+        await interaction.response.send_message("📭 You have no listings! Make one with `/market_list`.",
+                                                ephemeral=True)
+        return
+    embed, view = render_cancel(uid, None, None, listings)
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+@bot.tree.command(name="market_cancel_all", description="Cancel ALL your listings (items return to you).")
+async def market_cancel_all(interaction: discord.Interaction):
+    n = db.market_cancel_all(str(interaction.user.id))
+    if n == 0:
+        await interaction.response.send_message("📭 You have no listings!", ephemeral=True)
+    else:
+        await interaction.response.send_message(
+            f"🚫 Cancelled **{n}** listing(s) — items returned to your inventory.", ephemeral=True)
+
+
+def cancel_lines(listings: list[dict], selected_id: int | None = None) -> list[str]:
+    lines = []
+    for l in listings:
+        mark = "▶ " if l["id"] == selected_id else ""
+        lines.append(f"{mark}`{l['id']}` **{l['ore']} ({l['quality']})** — **${l['price']:,}**")
+    return lines
+
+
+def render_cancel(owner_id: str, ore: str | None, quality: str | None,
+                  listings: list[dict] | None = None, selected_id: int | None = None):
+    """Build the cancel embed + view for a stage. Falls back to stage 1 if empty."""
+    if listings is None:
+        listings = db.market_by_seller(owner_id, ore, quality, limit=10)
+    if not listings:
+        # fall back to your latest 10 overall
+        ore, quality, selected_id = None, None, None
+        listings = db.market_by_seller(owner_id, limit=10)
+    if ore is None:
+        title = "🚫 Your listings — latest 10"
+    elif quality is None:
+        title = f"🚫 Your {ore} — latest 10"
+    else:
+        title = f"🚫 Your {ore} ({quality}) — latest 10"
+    embed = discord.Embed(title=title, description="\n".join(cancel_lines(listings, selected_id))
+                          if listings else "Nothing here!", color=0xF44336)
+    return embed, CancelBrowser(int(owner_id), ore=ore, quality=quality,
+                                listings=listings, selected_id=selected_id)
+
+
+class CancelOreSelect(discord.ui.Select):
+    def __init__(self, owner_id: int):
+        self.owner_id = owner_id
+        ores = db.market_seller_ores(str(owner_id))
+        ores.sort(key=lambda o: min(config.tier_index(r) for r in o["rarities"]))
+        options = []
+        for o in ores[:25]:
+            tiers = ", ".join(config.tier_name(r) for r in sorted(o["rarities"], key=config.tier_index))
+            options.append(discord.SelectOption(
+                label=f"{o['ore']} ({tiers})"[:100], value=o["ore"]))
+        super().__init__(placeholder="Filter by ore…", options=options or [
+            discord.SelectOption(label="(no listings)", value="none")])
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        if self.values[0] == "none":
+            return
+        embed, view = render_cancel(str(self.owner_id), self.values[0], None)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class CancelQualitySelect(discord.ui.Select):
+    def __init__(self, owner_id: int, ore: str):
+        self.owner_id = owner_id
+        self.ore = ore
+        quals = db.market_seller_qualities(str(owner_id), ore)
+        options = [discord.SelectOption(label=q, value=q) for q in quals[:25]]
+        super().__init__(placeholder="Filter by quality…", options=options or [
+            discord.SelectOption(label="(none)", value="none")])
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        if self.values[0] == "none":
+            return
+        embed, view = render_cancel(str(self.owner_id), self.ore, self.values[0])
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class CancelListingSelect(discord.ui.Select):
+    """Every stage has one: pick which listing to cancel, then hit the button."""
+
+    def __init__(self, owner_id: int, listings: list[dict]):
+        self.owner_id = owner_id
+        options = []
+        for l in listings[:25]:
+            label = f"{l['ore']} ({l['quality']}) — ${l['price']:,}"[:100]
+            options.append(discord.SelectOption(label=label, description=f"ID {l['id']}",
+                                                value=str(l["id"])))
+        super().__init__(placeholder="Choose one to cancel…", options=options or [
+            discord.SelectOption(label="(none)", value="none")])
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        if self.values[0] == "none":
+            return
+        view: CancelBrowser = self.view
+        embed, _ = render_cancel(str(self.owner_id), view.ore, view.quality,
+                                 selected_id=int(self.values[0]))
+        view.selected_id = int(self.values[0])
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class CancelBrowser(discord.ui.View):
+    def __init__(self, owner_id: int, ore: str | None = None, quality: str | None = None,
+                 listings: list[dict] | None = None, selected_id: int | None = None):
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+        self.ore = ore
+        self.quality = quality
+        self.listings = listings or []
+        self.selected_id = selected_id
+        if ore is None:
+            self.add_item(CancelOreSelect(owner_id))
+        elif quality is None:
+            self.add_item(CancelQualitySelect(owner_id, ore))
+        if self.listings:
+            self.add_item(CancelListingSelect(owner_id, self.listings))
+
+    @discord.ui.button(label="Cancel this", style=discord.ButtonStyle.danger, emoji="🗑️")
+    async def cancel_this(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        if self.selected_id is None:
+            await interaction.response.send_message("☝️ Pick a listing from the dropdown first!",
+                                                    ephemeral=True)
+            return
+        ok, msg = db.market_cancel(self.selected_id, str(self.owner_id))
+        embed, view = render_cancel(str(self.owner_id), self.ore, self.quality)
+        await interaction.response.edit_message(embed=embed, view=view)
+        await interaction.followup.send(("✅ " if ok else "❌ ") + msg, ephemeral=True)
 
 
 # ----- stats / streak / achievements -----
@@ -793,7 +937,8 @@ async def help_cmd(interaction: discord.Interaction):
         "📦 `/market_list` — list an ore (dropdown picker)\n"
         "🏪 `/market_view` — browse the market + filters\n"
         "🛒 `/market_buy` — buy a listing by ID\n"
-        "🚫 `/market_cancel` — take down your listing\n"
+        "🚫 `/market_cancel` — take down a listing (dropdown picker)\n"
+        "🚫 `/market_cancel_all` — take down ALL listings\n"
         "📊 `/stats` — spins, pulls, streak, balance\n"
         "🏆 `/achievements` — your badges\n"
         "⛏️ `/ores` — all rarities, odds, values, ore lists\n"

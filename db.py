@@ -299,6 +299,52 @@ def market_cancel(listing_id: int, user_id: str):
         conn.commit()
         return True, "Listing cancelled — item returned to your inventory."
 
+
+def market_cancel_all(seller_id: str) -> int:
+    """Cancel every listing by this seller, returning items. Returns count."""
+    with _lock, get_conn() as conn:
+        rows = conn.execute("SELECT * FROM market WHERE seller_id=?", (seller_id,)).fetchall()
+        for l in rows:
+            conn.execute("INSERT INTO inventory (user_id, rarity, quality, ore) VALUES (?,?,?,?)",
+                         (seller_id, l["rarity"], l["quality"], l["ore"]))
+        conn.execute("DELETE FROM market WHERE seller_id=?", (seller_id,))
+        conn.commit()
+        return len(rows)
+
+
+def market_seller_ores(seller_id: str) -> list[dict]:
+    """Distinct ores this seller has listed: [{ore, rarities}, ...]"""
+    with _lock, get_conn() as conn:
+        rows = conn.execute("SELECT DISTINCT ore, rarity FROM market WHERE seller_id=? ORDER BY ore, rarity",
+                            (seller_id,)).fetchall()
+        grouped: dict[str, list[str]] = {}
+        for r in rows:
+            grouped.setdefault(r["ore"], []).append(r["rarity"])
+        return [{"ore": ore, "rarities": rars} for ore, rars in grouped.items()]
+
+
+def market_seller_qualities(seller_id: str, ore: str) -> list[str]:
+    with _lock, get_conn() as conn:
+        rows = conn.execute("SELECT DISTINCT quality FROM market WHERE seller_id=? AND ore=? ORDER BY quality",
+                            (seller_id, ore)).fetchall()
+        return [r["quality"] for r in rows]
+
+
+def market_by_seller(seller_id: str, ore: str | None = None,
+                     quality: str | None = None, limit: int = 10) -> list[dict]:
+    clauses, params = ["seller_id = ?"], [seller_id]
+    if ore:
+        clauses.append("ore = ?")
+        params.append(ore)
+    if quality:
+        clauses.append("quality = ?")
+        params.append(quality)
+    with _lock, get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM market WHERE {' AND '.join(clauses)} ORDER BY id DESC LIMIT ?",
+            (*params, limit)).fetchall()
+        return [dict(r) for r in rows]
+
 # ---------- achievements ----------
 
 def has_achievement(user_id: str, ach_id: str) -> bool:

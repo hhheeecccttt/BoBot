@@ -40,7 +40,8 @@ python3 bot.py
 | `/market_list` | Pick an ore from a dropdown, set a price in the popup |
 | `/market_view` | Latest 10 + dropdown filters (ore → quality → cheapest/average/priciest) |
 | `/market_buy <id>` | Buy a listing |
-| `/market_cancel <id>` | Take down your listing |
+| `/market_cancel` | Your latest 10 + dropdowns (ore → quality → pick + button) |
+| `/market_cancel_all` | Cancel every listing, items return to you |
 | `/stats [user]` | Total spins, pulls per rarity, streak, balance |
 | `/achievements` | Your badges |
 | `/ores` | All rarities, odds, quicksell values, and ore lists |
