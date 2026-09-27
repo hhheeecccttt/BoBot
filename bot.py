@@ -329,16 +329,6 @@ class OrePageView(discord.ui.View):
         await interaction.response.send_modal(
             QuicksellAmountModal(self.viewer_id, rarity, quality, self.ore))
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji="↩")
-    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.viewer_id:
-            await interaction.response.send_message("That's not yours! Run `/inventory` yourself.",
-                                                    ephemeral=True)
-            return
-        embed, view = render_inventory(str(self.target_id), self.target_name,
-                                       self.viewer_id, self.public, self.quality_filter)
-        await interaction.response.edit_message(embed=embed, view=view)
-
 
 class QualityFilterSelect(discord.ui.Select):
     """Level 1: show only one quality (or everything)."""
@@ -467,63 +457,105 @@ async def restore_trades():
 
 # ---------- commands ----------
 
-@bot.tree.command(name="spin", description=f"Use one of your {config.SPINS_PER_DAY} daily spins!")
-async def spin(interaction: discord.Interaction):
+@bot.tree.command(name="spin", description=f"Spin! Optional amount (up to 1000).")
+@app_commands.describe(amount="How many spins (default 1, max 1000)")
+async def spin(interaction: discord.Interaction, amount: app_commands.Range[int, 1, 1000] = 1):
     await interaction.response.defer()
     uid = str(interaction.user.id)
     db.init_db()
     u = db.reset_spins_if_new_day(uid, today_str())
 
-    if not UNLIMITED_SPINS and u["spins_used_today"] >= config.SPINS_PER_DAY:
-        await interaction.followup.send(
-            f"❌ You're out of spins! You get **{config.SPINS_PER_DAY}** per day.\n"
-            f"⏳ Resets in **{time_until_reset()}**.\n"
-            f"🔥 Streak: **{u['streak']}** day(s) — spin daily to keep it!"
-        )
-        return
+    if UNLIMITED_SPINS:
+        n = amount
+        spins_left_text = "∞ (test mode)"
+    else:
+        remaining = config.SPINS_PER_DAY - u["spins_used_today"]
+        if remaining <= 0:
+            await interaction.followup.send(
+                f"❌ You're out of spins! You get **{config.SPINS_PER_DAY}** per day.\n"
+                f"⏳ Resets in **{time_until_reset()}**.\n"
+                f"🔥 Streak: **{u['streak']}** day(s) — spin daily to keep it!"
+            )
+            return
+        n = min(amount, remaining)
+        spins_left_text = None  # computed after spinning
 
-    rarity, quality, ore = roll_one()
-    item_id = db.add_item(uid, rarity, quality, ore)
+    pulls: list[tuple[str, str, str]] = [roll_one() for _ in range(n)]
+    item_id = None
+    for rarity, quality, ore in pulls:
+        item_id = db.add_item(uid, rarity, quality, ore)  # n==1: this IS the pulled item
 
-    # update counters
+    # update counters in one go
+    order = ["Low", "Mid", "High", "Elite", "DIH"]
     key = {"Low": "low_pulls", "Mid": "mid_pulls", "High": "high_pulls",
-           "Elite": "elite_pulls", "DIH": "dih_pulls"}[rarity]
+           "Elite": "elite_pulls", "DIH": "dih_pulls"}
     u = db.get_user(uid)
-    updates = dict(spins_used_today=u["spins_used_today"] + 1,
-                   total_spins=u["total_spins"] + 1, **{key: u[key] + 1})
-    if quality == "Perfect":
-        updates["perfect_pulls"] = u.get("perfect_pulls", 0) + 1
+    counts = {r: sum(1 for p in pulls if p[0] == r) for r in order}
+    perfect_n = sum(1 for p in pulls if p[1] == "Perfect")
+    updates = dict(spins_used_today=u["spins_used_today"] + n, total_spins=u["total_spins"] + n)
+    for r in order:
+        updates[key[r]] = u[key[r]] + counts[r]
+    updates["perfect_pulls"] = u.get("perfect_pulls", 0) + perfect_n
     db.update_user(uid, **updates)
     u = db.update_streak(uid, today_str())
     u = db.get_user(uid)
-
-    pct, one_in = config.combined_odds(rarity, quality)
-    value = config.quicksell_value(rarity)
-    if UNLIMITED_SPINS:
-        spins_left_text = "∞ (test mode)"
-    else:
+    if spins_left_text is None:
         spins_left_text = f"{config.SPINS_PER_DAY - u['spins_used_today']}/{config.SPINS_PER_DAY}"
 
-    newly = check_achievements(uid, u, rarity, quality)
-    ach_text = ("\n\n" + "\n".join(newly)) if newly else ""
+    rarities_hit = {p[0] for p in pulls}
+    quals_hit = {p[1] for p in pulls}
+    newly: list[str] = []
+    for r in order:
+        if r in rarities_hit:
+            newly += check_achievements(uid, u, r, "")
+    for q in config.QUALITIES:
+        if q in quals_hit:
+            newly += check_achievements(uid, u, "", q)
 
-    embed = discord.Embed(
-        title=f"{ore} ({quality} {config.QUALITIES[quality]['emoji']})!",
-        description=f"{config.tier_name(rarity)} {config.RARITIES[rarity]['dot']}",
-        color=config.RARITIES[rarity]["color"],
-    )
-    embed.add_field(name="💰 Quicksell", value=f"${value:,}", inline=True)
-    embed.add_field(name="🎰 Spins left today", value=spins_left_text, inline=True)
-    embed.set_footer(text=f"🔥 {u['streak']}-day streak • {interaction.user.display_name}")
-    if rarity == "DIH":
-        embed.add_field(name="🌟", value="**DIH TIER PULL!!** Insane luck.", inline=False)
-
-    view = SpinView(interaction.user.id, item_id, rarity, quality, ore)
-    # set quicksell button label (first child is the quicksell button)
-    view.children[0].label = f"Quicksell ${value:,}"
-    await interaction.followup.send(embed=embed, view=view)
+    if n == 1:
+        rarity, quality, ore = pulls[0]
+        value = config.quicksell_value(rarity)
+        embed = discord.Embed(
+            title=f"{ore} ({quality} {config.QUALITIES[quality]['emoji']})!",
+            description=f"{config.tier_name(rarity)} {config.RARITIES[rarity]['dot']}",
+            color=config.RARITIES[rarity]["color"],
+        )
+        embed.add_field(name="💰 Quicksell", value=f"${value:,}", inline=True)
+        embed.add_field(name="🎰 Spins left today", value=spins_left_text, inline=True)
+        embed.set_footer(text=f"🔥 {u['streak']}-day streak • {interaction.user.display_name}")
+        if rarity == "DIH":
+            embed.add_field(name="🌟", value="**DIH TIER PULL!!** Insane luck.", inline=False)
+        if item_id is not None:
+            view = SpinView(interaction.user.id, item_id, rarity, quality, ore)
+            view.children[0].label = f"Quicksell ${value:,}"
+            await interaction.followup.send(embed=embed, view=view)
+        else:
+            await interaction.followup.send(embed=embed)
+    else:
+        # summary for multi-spins: rarest pull first
+        best = min(pulls, key=lambda p: (order.index(p[0]),
+                                         list(config.QUALITIES.keys()).index(p[1])))
+        haul_value = sum(config.quicksell_value(p[0]) for p in pulls)
+        lines = [f"{config.RARITIES[r]['dot']} {config.tier_name(r)} x{counts[r]}"
+                 for r in order if counts[r]]
+        embed = discord.Embed(title=f"🎰 x{n} spins!", color=0x9E9E9E)
+        embed.add_field(
+            name="⭐ Best pull",
+            value=f"**{best[2]} ({best[1]})** — {config.tier_name(best[0])} {config.RARITIES[best[0]]['dot']}",
+            inline=False)
+        embed.add_field(name="📦 Haul", value="\n".join(lines) if lines else "—", inline=True)
+        embed.add_field(name="💰 Haul quicksell value", value=f"${haul_value:,}", inline=True)
+        embed.add_field(name="🎰 Spins left today", value=spins_left_text, inline=True)
+        embed.set_footer(text=f"🔥 {u['streak']}-day streak • {interaction.user.display_name}")
+        await interaction.followup.send(embed=embed)
     if newly:
-        await interaction.followup.send(f"{interaction.user.mention} 🏆 Achievement unlocked!\n" + "\n".join(newly))
+        # de-dupe (multiple checks can grant different achievements; same one can't double-grant)
+        seen, unique = set(), []
+        for line in newly:
+            if line not in seen:
+                seen.add(line)
+                unique.append(line)
+        await interaction.followup.send(f"{interaction.user.mention} 🏆 Achievement unlocked!\n" + "\n".join(unique))
 
 
 @bot.tree.command(name="balance", description="Check your balance.")
