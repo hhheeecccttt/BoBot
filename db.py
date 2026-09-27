@@ -38,7 +38,13 @@ def init_db():
             sell_count INTEGER NOT NULL DEFAULT 0,
             inv_public INTEGER NOT NULL DEFAULT 0,
             ach_public INTEGER NOT NULL DEFAULT 0,
-            stats_public INTEGER NOT NULL DEFAULT 0
+            stats_public INTEGER NOT NULL DEFAULT 0,
+            bank_public INTEGER NOT NULL DEFAULT 0,
+            vault_public INTEGER NOT NULL DEFAULT 0,
+            market_public INTEGER NOT NULL DEFAULT 0,
+            bank_balance INTEGER NOT NULL DEFAULT 0,
+            rarest_spin TEXT NOT NULL DEFAULT '',
+            rarest_buy TEXT NOT NULL DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,6 +86,28 @@ def init_db():
             message_id TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS kv (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS mail (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            is_read INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_mail_user ON mail(user_id);
+        CREATE TABLE IF NOT EXISTS vault (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            rarity TEXT NOT NULL,
+            quality TEXT NOT NULL,
+            ore TEXT NOT NULL,
+            origin TEXT NOT NULL DEFAULT 'spin',
+            stored_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_vault_user ON vault(user_id);
         """)
         # --- migrations for DBs created before these columns existed ---
         for _table, _col, _ddl in (
@@ -89,6 +117,12 @@ def init_db():
             ("users", "inv_public", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "ach_public", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "stats_public", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "bank_public", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "vault_public", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "market_public", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "bank_balance", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "rarest_spin", "TEXT NOT NULL DEFAULT ''"),
+            ("users", "rarest_buy", "TEXT NOT NULL DEFAULT ''"),
             ("inventory", "origin", "TEXT NOT NULL DEFAULT 'spin'"),
         ):
             try:
@@ -173,6 +207,57 @@ def take_one_item(user_id: str, rarity: str, quality: str, ore: str):
         conn.execute("DELETE FROM inventory WHERE id=?", (item["id"],))
         conn.commit()
         return item
+
+
+def add_many_items(user_id: str, pulls: list[tuple[str, str, str]], origin: str = "spin"):
+    """Batch insert (multi-spin). One transaction — fast even for 1000s of rows."""
+    if not pulls:
+        return
+    with _lock, get_conn() as conn:
+        conn.executemany(
+            "INSERT INTO inventory (user_id, rarity, quality, ore, origin) VALUES (?,?,?,?,?)",
+            [(user_id, r, q, o, origin) for r, q, o in pulls],
+        )
+        conn.commit()
+
+
+def remove_many_items(user_id: str, rarity: str, quality: str, ore: str,
+                      limit: int | None = None, origin: str | None = None) -> int:
+    """Batch delete from one stack. Single statement — returns rows removed."""
+    extra, params = "", []
+    if origin is not None:
+        extra, params = " AND origin = ?", [origin]
+    with _lock, get_conn() as conn:
+        if limit is None:
+            cur = conn.execute(
+                f"DELETE FROM inventory WHERE user_id=? AND rarity=? AND quality=? AND ore=?{extra}",
+                (user_id, rarity, quality, ore, *params),
+            )
+        else:
+            cur = conn.execute(
+                f"""DELETE FROM inventory WHERE id IN (
+                     SELECT id FROM inventory WHERE user_id=? AND rarity=? AND quality=? AND ore=?{extra}
+                     ORDER BY id LIMIT ?)""",
+                (user_id, rarity, quality, ore, *params, limit),
+            )
+        conn.commit()
+        return cur.rowcount
+
+
+def clear_stacks(user_id: str, stacks: list[dict]) -> int:
+    """Delete every row in the given grouped stacks. Returns total removed."""
+    if not stacks:
+        return 0
+    total = 0
+    with _lock, get_conn() as conn:
+        for t in stacks:
+            cur = conn.execute(
+                "DELETE FROM inventory WHERE user_id=? AND rarity=? AND quality=? AND ore=?",
+                (user_id, t["rarity"], t["quality"], t["ore"]),
+            )
+            total += cur.rowcount
+        conn.commit()
+        return total
 
 
 def remove_one_item(user_id: str, rarity: str, quality: str, ore: str):
@@ -268,6 +353,17 @@ def owns_all_ores(user_id: str, ore_names: list[str]) -> bool:
         rows = conn.execute("SELECT DISTINCT ore FROM inventory WHERE user_id=?", (user_id,)).fetchall()
         owned = {r["ore"] for r in rows}
         return all(o in owned for o in ore_names)
+
+
+def owns_all_stacks(user_id: str, pairs: list[tuple[str, str]]) -> bool:
+    """True if the user holds every (ore, quality) combo (quality collectors)."""
+    if not pairs:
+        return False
+    with _lock, get_conn() as conn:
+        rows = conn.execute("SELECT DISTINCT ore, quality FROM inventory WHERE user_id=?",
+                            (user_id,)).fetchall()
+        owned = {(r["ore"], r["quality"]) for r in rows}
+        return all(p in owned for p in pairs)
 
 
 def origin_counts(user_id: str, rarity: str, quality: str, ore: str) -> dict:
@@ -504,6 +600,170 @@ def max_trade_id() -> int:
     with _lock, get_conn() as conn:
         row = conn.execute("SELECT MAX(id) m FROM trades").fetchone()
         return row["m"] or 0
+
+
+# ---------- kv settings (kill-switch, spins/day, max spin) ----------
+
+KV_DEFAULTS = {
+    "commands_enabled": "1",
+    "spins_per_day": "3",
+    "max_spin": "1000",
+}
+
+
+def get_setting(key: str) -> str:
+    with _lock, get_conn() as conn:
+        row = conn.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+        if row is None:
+            return KV_DEFAULTS.get(key, "")
+        return row["value"]
+
+
+def set_setting(key: str, value: str):
+    with _lock, get_conn() as conn:
+        conn.execute("INSERT INTO kv (key, value) VALUES (?,?) "
+                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+        conn.commit()
+
+
+# ---------- mail ----------
+
+def add_mail(user_id: str, text: str):
+    with _lock, get_conn() as conn:
+        conn.execute("INSERT INTO mail (user_id, text) VALUES (?,?)", (user_id, text))
+        conn.commit()
+
+
+def get_mail(user_id: str, limit: int = 50) -> list[dict]:
+    with _lock, get_conn() as conn:
+        rows = conn.execute("SELECT * FROM mail WHERE user_id=? ORDER BY id DESC LIMIT ?",
+                            (user_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def clear_mail(user_id: str) -> int:
+    with _lock, get_conn() as conn:
+        cur = conn.execute("DELETE FROM mail WHERE user_id=?", (user_id,))
+        conn.commit()
+        return cur.rowcount
+
+
+# ---------- vault (same shape as inventory, no quicksell) ----------
+
+def vault_add(user_id: str, rarity: str, quality: str, ore: str, origin: str = "spin") -> int:
+    with _lock, get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO vault (user_id, rarity, quality, ore, origin) VALUES (?,?,?,?,?)",
+            (user_id, rarity, quality, ore, origin),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def vault_take_one(user_id: str, rarity: str, quality: str, ore: str):
+    with _lock, get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM vault WHERE user_id=? AND rarity=? AND quality=? AND ore=? ORDER BY id LIMIT 1",
+            (user_id, rarity, quality, ore),
+        ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        conn.execute("DELETE FROM vault WHERE id=?", (item["id"],))
+        conn.commit()
+        return item
+
+
+def vault_add_many(user_id: str, rows: list[tuple[str, str, str, str]]):
+    """Batch insert into vault. rows = [(rarity, quality, ore, origin)]."""
+    if not rows:
+        return
+    with _lock, get_conn() as conn:
+        conn.executemany(
+            "INSERT INTO vault (user_id, rarity, quality, ore, origin) VALUES (?,?,?,?,?)",
+            [(user_id, r, q, o, org) for r, q, o, org in rows],
+        )
+        conn.commit()
+
+
+def vault_remove_many(user_id: str, rarity: str, quality: str, ore: str, limit: int,
+                      origin: str | None = None) -> int:
+    extra, params = (" AND origin = ?", [origin]) if origin is not None else ("", [])
+    with _lock, get_conn() as conn:
+        cur = conn.execute(
+            f"""DELETE FROM vault WHERE id IN (
+                 SELECT id FROM vault WHERE user_id=? AND rarity=? AND quality=? AND ore=?{extra}
+                 ORDER BY id LIMIT ?)""",
+            (user_id, rarity, quality, ore, *params, limit),
+        )
+        conn.commit()
+        return cur.rowcount
+
+
+def vault_origin_counts(user_id: str, rarity: str, quality: str, ore: str) -> dict:
+    with _lock, get_conn() as conn:
+        rows = conn.execute(
+            """SELECT origin, COUNT(*) as count FROM vault
+               WHERE user_id=? AND rarity=? AND quality=? AND ore=? GROUP BY origin""",
+            (user_id, rarity, quality, ore),
+        ).fetchall()
+        return {r["origin"]: r["count"] for r in rows}
+
+
+def vault_by_quality(user_id: str, quality: str) -> list[dict]:
+    with _lock, get_conn() as conn:
+        rows = conn.execute(
+            """SELECT ore, COUNT(*) as count, GROUP_CONCAT(DISTINCT rarity) as rarities
+               FROM vault WHERE user_id=? AND quality=? GROUP BY ore ORDER BY count DESC""",
+            (user_id, quality),
+        ).fetchall()
+        return [{"ore": r["ore"], "count": r["count"],
+                 "rarities": (r["rarities"] or "").split(",")} for r in rows]
+
+
+def vault_overview(user_id: str) -> list[dict]:
+    with _lock, get_conn() as conn:
+        rows = conn.execute(
+            """SELECT ore, COUNT(*) as count, GROUP_CONCAT(DISTINCT rarity) as rarities
+               FROM vault WHERE user_id=? GROUP BY ore ORDER BY count DESC""",
+            (user_id,),
+        ).fetchall()
+        return [{"ore": r["ore"], "count": r["count"],
+                 "rarities": (r["rarities"] or "").split(",")} for r in rows]
+
+
+def vault_detail(user_id: str, ore: str) -> list[dict]:
+    import config as _cfg
+    order = " ".join(f"WHEN '{q}' THEN {i}" for i, q in enumerate(_cfg.QUALITIES))
+    with _lock, get_conn() as conn:
+        rows = conn.execute(
+            f"""SELECT rarity, quality, ore, COUNT(*) as count FROM vault
+               WHERE user_id=? AND ore=? GROUP BY rarity, quality, ore
+               ORDER BY CASE quality {order} END""",
+            (user_id, ore),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def vault_value(user_id: str, ore: str | None = None) -> tuple[int, int]:
+    import config as _cfg
+    clauses, params = ["user_id = ?"], [user_id]
+    if ore:
+        clauses.append("ore = ?")
+        params.append(ore)
+    with _lock, get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT rarity, COUNT(*) as count FROM vault WHERE {' AND '.join(clauses)} GROUP BY rarity",
+            params,
+        ).fetchall()
+        return (sum(r["count"] for r in rows),
+                sum(_cfg.quicksell_value(r["rarity"]) * r["count"] for r in rows))
+
+
+def vault_count(user_id: str) -> int:
+    with _lock, get_conn() as conn:
+        row = conn.execute("SELECT COUNT(*) c FROM vault WHERE user_id=?", (user_id,)).fetchone()
+        return row["c"]
 
 
 # ---------- achievements ----------

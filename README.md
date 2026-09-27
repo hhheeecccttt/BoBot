@@ -41,13 +41,19 @@ python3 bot.py
 | `/market_cancel` | Your latest 10 + dropdowns (ore → quality → pick + button) |
 | `/market_cancel_all` | Cancel every listing, items return to you |
 | `/trade @player` | Trade ores (one-sided OK, both accept) |
-| `/stats [@user]` | Spins, pulls, streak, balance, achievement count |
-| `/achievements` | Your badges (paged, filterable) |
+| `/stats [@user]` | Spins, pulls, streak, balance, assets, rarest spin/buy, achievement count |
+| `/achievements [@user]` | Badges (paged, filterable) |
 | `/odds` | Rarities, odds, quicksell values |
 | `/ores` | Browse every ore tier by tier |
 | `/baltop` | Top 10 richest players (no pings, shows your rank) |
-| `/settings` | Privacy: inventory / achievements / stats public or private |
+| `/balance` | Balance, assets, bank + transfer button |
+| `/bank [@user]` | Bank balance + withdraw |
+| `/vault [@user]` | Long-term storage (no quicksell) |
+| `/mail` | Sale + gift notifications (paged) |
+| `/settings` | Privacy: inventory / achievements / stats / vault / bank / market |
+| `/faq` | How quicksell, market, spins work |
 | `/help` | List of every command |
+| Admin: `/admin_give`, `/admin_disable`, `/admin_enable`, `/admin_spins` | Emergencies + events |
 
 ## Values / odds (from your spec)
 
