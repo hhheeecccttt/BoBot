@@ -392,9 +392,74 @@ class InventoryView(discord.ui.View):
     def __init__(self, viewer_id: int, target_id: int, target_name: str, ores: list[dict],
                  public: bool, quality_filter: str | None = None):
         super().__init__(timeout=180)
+        self.viewer_id = viewer_id
+        self.target_id = target_id
+        self.quality_filter = quality_filter
         self.add_item(QualityFilterSelect(viewer_id, target_id, target_name, public, quality_filter))
         if ores:
             self.add_item(OreSelect(viewer_id, target_id, ores, public, quality_filter))
+        if viewer_id != target_id:
+            self.quicksell_all_shown.disabled = True
+
+    @discord.ui.button(label="Quicksell", style=discord.ButtonStyle.green, emoji="💸", row=2)
+    async def quicksell_all_shown(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.viewer_id or self.viewer_id != self.target_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        await interaction.response.send_modal(
+            InventoryQuicksellModal(self.viewer_id, self.quality_filter))
+
+
+class InventoryQuicksellModal(discord.ui.Modal, title="Quicksell shown ores"):
+    amount = discord.ui.TextInput(label="How many? (number or ALL)", placeholder="e.g. 5 or ALL",
+                                  max_length=8)
+
+    def __init__(self, owner_id: int, quality: str | None):
+        super().__init__()
+        self.owner_id = owner_id
+        self.quality = quality
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        uid = str(self.owner_id)
+        items = db.get_inventory_grouped(uid)
+        targets = [i for i in items if self.quality is None or i["quality"] == self.quality]
+        if not targets:
+            await interaction.response.send_message("❌ Nothing to sell.", ephemeral=True)
+            return
+        raw = str(self.amount.value).strip().lower()
+        sell_all = raw in ("all", "max")
+        if not sell_all:
+            try:
+                limit = int(raw)
+            except ValueError:
+                await interaction.response.send_message("❌ Type a number or ALL.", ephemeral=True)
+                return
+            limit = max(0, limit)
+        sold, earned = 0, 0
+        for t in targets:
+            n = t["count"] if sell_all else min(limit - sold, t["count"])
+            if n <= 0:
+                break
+            for _ in range(n):
+                if db.remove_one_item(uid, t["rarity"], t["quality"], t["ore"]) is None:
+                    break
+                earned += config.quicksell_value(t["rarity"])
+                sold += 1
+            if not sell_all and sold >= limit:
+                break
+        u = db.get_user(uid)
+        db.update_user(uid, balance=u["balance"] + earned, total_earned=u["total_earned"] + earned)
+        newly = check_achievements(uid, db.get_user(uid), "", "")
+        scope = f"({self.quality} only)" if self.quality else "(everything shown)"
+        await interaction.response.send_message(
+            f"💸 Sold **{sold}** ore(s) {scope} for **${earned:,}**!", ephemeral=True)
+        if newly:
+            await interaction.followup.send(
+                f"{interaction.user.mention} 🏆 Achievement unlocked!\n" + "\n".join(newly),
+                ephemeral=True)
 
 
 def render_inventory(target_id: str, target_name: str, viewer_id: int, public: bool,
