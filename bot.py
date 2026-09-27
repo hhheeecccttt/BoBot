@@ -311,7 +311,8 @@ class OrePageView(discord.ui.View):
         for s in self.stacks:
             mark = "▶ " if (s["rarity"], s["quality"]) == self.selected else ""
             lines.append(f"{mark}**{s['ore']} ({s['quality']})** x{s['count']}")
-        title = f"⛏️ {self.ore} ({n} ores) (${v:,})"
+        dot = config.RARITIES[min(self.stacks, key=lambda s: config.tier_index(s["rarity"]))["rarity"]]["dot"] if self.stacks else "⛏️"
+        title = f"{dot} {self.ore} ({n} ores) (${v:,})"
         if self.quality_filter:
             title += f" — {self.quality_filter} only"
         return discord.Embed(title=title, description="\n".join(lines), color=0x00BCD4)
@@ -508,7 +509,7 @@ async def spin(interaction: discord.Interaction):
 
     embed = discord.Embed(
         title=f"{ore} ({quality} {config.QUALITIES[quality]['emoji']})!",
-        description=f"{config.tier_name(rarity)} {config.RARITIES[rarity]['dot']} ({config.RARITIES[rarity]['chance']:g}%)",
+        description=f"{config.tier_name(rarity)} {config.RARITIES[rarity]['dot']}",
         color=config.RARITIES[rarity]["color"],
     )
     embed.add_field(name="💰 Quicksell", value=f"${value:,}", inline=True)
@@ -1338,7 +1339,7 @@ class OresView(discord.ui.View):
         ri = config.RARITIES[r]
         idx = self.tiers.index(r)
         embed = discord.Embed(
-            title=f"⛏️ {config.tier_name(r)} Ores",
+            title=f"{ri['dot']} {config.tier_name(r)} Ores",
             description="\n".join(f"• **{o}**" for o in config.ORES[r]),
             color=ri["color"])
         embed.add_field(name="💰 Quicksell", value=f"${ri['value']:,} each", inline=True)
