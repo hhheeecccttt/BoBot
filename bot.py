@@ -1,4 +1,5 @@
 import os
+import json
 import random
 from datetime import datetime, timezone, timedelta
 
@@ -288,11 +289,12 @@ class QualityInspectSelect(discord.ui.Select):
 class OrePageView(discord.ui.View):
     """Level 2 view: quality breakdown of one ore + inspect dropdown + quicksell button."""
 
-    def __init__(self, viewer_id: int, target_id: int, ore: str, stacks: list[dict],
-                 public: bool, quality_filter: str | None = None):
+    def __init__(self, viewer_id: int, target_id: int, target_name: str, ore: str,
+                 stacks: list[dict], public: bool, quality_filter: str | None = None):
         super().__init__(timeout=180)
         self.viewer_id = viewer_id
         self.target_id = target_id
+        self.target_name = target_name
         self.ore = ore
         self.stacks = stacks
         self.public = public
@@ -325,6 +327,16 @@ class OrePageView(discord.ui.View):
         rarity, quality = self.selected
         await interaction.response.send_modal(
             QuicksellAmountModal(self.viewer_id, rarity, quality, self.ore))
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji="↩")
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.viewer_id:
+            await interaction.response.send_message("That's not yours! Run `/inventory` yourself.",
+                                                    ephemeral=True)
+            return
+        embed, view = render_inventory(str(self.target_id), self.target_name,
+                                       self.viewer_id, self.public, self.quality_filter)
+        await interaction.response.edit_message(embed=embed, view=view)
 
 
 class QualityFilterSelect(discord.ui.Select):
@@ -378,8 +390,9 @@ class OreSelect(discord.ui.Select):
         if not stacks:
             await interaction.response.send_message("Nothing there anymore.", ephemeral=True)
             return
-        view = OrePageView(self.viewer_id, self.target_id, ore, stacks,
-                           self.public, self.quality_filter)
+        view = OrePageView(self.viewer_id, self.target_id,
+                           await display_name(interaction, str(self.target_id)),
+                           ore, stacks, self.public, self.quality_filter)
         await interaction.response.send_message(
             embed=view.page_embed(), view=view, ephemeral=not self.public)
 
@@ -423,6 +436,32 @@ async def on_ready():
     except Exception as e:
         print(f"Slash sync failed: {e}")
     print(f"Logged in as {bot.user} — /spin ready!" + (" [UNLIMITED SPINS TEST MODE]" if UNLIMITED_SPINS else ""))
+    await restore_trades()
+
+
+async def restore_trades():
+    """Re-attach views to trade messages after a restart so active trades survive."""
+    for row in db.open_trades():
+        t = _mem_trade(row)
+        if not t["channel_id"] or not t["message_id"]:
+            continue
+        try:
+            channel = bot.get_channel(int(t["channel_id"])) or await bot.fetch_channel(int(t["channel_id"]))
+            message = await channel.fetch_message(int(t["message_id"]))
+        except Exception:
+            db.delete_trade(t["id"])
+            continue
+        t["message"] = message
+        trades[t["id"]] = t
+        try:
+            if t["stage"] == "main":
+                await message.edit(embed=trade_embed(t), view=TradeMainView(t["id"]))
+            else:
+                await message.edit(view=TradeRequestView(t["id"]))
+        except Exception:
+            pass
+    if trades:
+        print(f"Restored {len(trades)} active trade(s).")
 
 
 # ---------- commands ----------
@@ -469,7 +508,7 @@ async def spin(interaction: discord.Interaction):
 
     embed = discord.Embed(
         title=f"{ore} ({quality} {config.QUALITIES[quality]['emoji']})!",
-        description=f"{config.RARITIES[rarity]['dot']} {config.tier_name(rarity)}",
+        description=f"{config.tier_name(rarity)} {config.RARITIES[rarity]['dot']} ({config.RARITIES[rarity]['chance']:g}%)",
         color=config.RARITIES[rarity]["color"],
     )
     embed.add_field(name="💰 Quicksell", value=f"${value:,}", inline=True)
@@ -1178,6 +1217,7 @@ class AchievementsFilterSelect(discord.ui.Select):
         view.filter = self.values[0]
         view.page = 0
         view.refresh_items()
+        view.sync_select()
         await interaction.response.edit_message(embed=view.make_embed(), view=view)
 
 
@@ -1193,7 +1233,16 @@ class AchievementsView(discord.ui.View):
         self.all_items = list(config.ACHIEVEMENTS.items())
         self.items = self.all_items
         self.pages = max(1, (len(self.items) + self.PER_PAGE - 1) // self.PER_PAGE)
-        self.add_item(AchievementsFilterSelect(self.filter))
+        self.filter_select = AchievementsFilterSelect(self.filter)
+        self.add_item(self.filter_select)
+
+    def sync_select(self):
+        """Rebuild dropdown options so the shown selection matches the filter."""
+        self.filter_select.options = [
+            discord.SelectOption(label="All", value="all", default=(self.filter == "all")),
+            discord.SelectOption(label="Completed", value="done", default=(self.filter == "done")),
+            discord.SelectOption(label="Incomplete", value="todo", default=(self.filter == "todo")),
+        ]
 
     def refresh_items(self):
         if self.filter == "done":
@@ -1207,7 +1256,7 @@ class AchievementsView(discord.ui.View):
     def make_embed(self) -> discord.Embed:
         chunk = self.items[self.page * self.PER_PAGE:(self.page + 1) * self.PER_PAGE]
         filt = {"all": "", "done": " — completed", "todo": " — incomplete"}[self.filter]
-        lines = [f"{config.ACH_CATEGORIES.get(aid, '🏆')} {'✅' if aid in self.unlocked else '🔒'} **{name}** — {desc}"
+        lines = [f"{'✅' if aid in self.unlocked else '🔒'} **{name}** — {desc}"
                  for aid, (name, desc) in chunk]
         embed = discord.Embed(
             title=f"🏆 Achievements ({len(self.unlocked)}/{len(self.all_items)}){filt}",
@@ -1237,13 +1286,10 @@ class AchievementsView(discord.ui.View):
 async def odds(interaction: discord.Interaction):
     embed = discord.Embed(title="🎲 Odds & Values", color=0xFF9800)
     for r, ri in config.RARITIES.items():
-        exact = 100.0 / ri["chance"] if ri["chance"] > 0 else 0
-        # Whole numbers, except near-1 odds which get one decimal (1 in 1.4)
-        one_in_txt = f"{exact:.1f}" if round(exact) == 1 and exact != 1 else f"{round(exact):,}"
         embed.add_field(
             name=f"{ri['emoji']} {config.tier_name(r)}",
             value=f"Quicksell: **${ri['value']:,}**\n"
-                  f"Odds: **{ri['chance']}%** (1 in {one_in_txt} chance)",
+                  f"Odds: **{ri['chance']:g}%** (1 in {config.rarity_one_in(ri['chance'])} chance)",
             inline=False,
         )
     q_lines = []
@@ -1272,6 +1318,7 @@ class OresTierSelect(discord.ui.Select):
             await interaction.response.send_message("Run `/ores` yourself to browse!", ephemeral=True)
             return
         view.tier = self.values[0]
+        view.sync_select()
         await interaction.response.edit_message(embed=view.make_embed(), view=view)
 
 
@@ -1295,9 +1342,19 @@ class OresView(discord.ui.View):
             description="\n".join(f"• **{o}**" for o in config.ORES[r]),
             color=ri["color"])
         embed.add_field(name="💰 Quicksell", value=f"${ri['value']:,} each", inline=True)
-        embed.add_field(name="📊 Rarity odds", value=f"{ri['chance']}%", inline=True)
+        embed.add_field(name="📊 Rarity odds",
+                        value=f"{ri['chance']:g}% (1 in {config.rarity_one_in(ri['chance'])} chance)",
+                        inline=True)
         embed.set_footer(text=f"Tier {idx + 1}/{len(self.tiers)}")
         return embed
+
+    def sync_select(self):
+        """Rebuild dropdown options so the shown selection always matches the page."""
+        self.tier_select.options = [
+            discord.SelectOption(label=config.tier_name(r), value=r, default=(r == self.tier),
+                                 emoji=config.RARITIES[r].get("dot", ""))
+            for r in config.RARITIES
+        ]
 
     async def _turn(self, interaction: discord.Interaction, delta: int):
         if interaction.user.id != self.owner_id:
@@ -1305,8 +1362,7 @@ class OresView(discord.ui.View):
             return
         idx = self.tiers.index(self.tier)
         self.tier = self.tiers[(idx + delta) % len(self.tiers)]
-        for opt in self.tier_select.options:
-            opt.default = (opt.value == self.tier)
+        self.sync_select()
         await interaction.response.edit_message(embed=self.make_embed(), view=self)
 
     @discord.ui.button(emoji="◀", style=discord.ButtonStyle.secondary, row=1)
@@ -1461,16 +1517,32 @@ async def settings(interaction: discord.Interaction):
         embed=settings_embed(str(interaction.user.id), view.selected), view=view, ephemeral=True)
 
 
-# ---------- trading (one ore per side, both accept) ----------
+# ---------- trading (one ore per side, both accept; persisted in DB) ----------
 
 trades: dict[int, dict] = {}
-_trade_counter = 0
 
 
-def _next_trade_id() -> int:
-    global _trade_counter
-    _trade_counter += 1
-    return _trade_counter
+def _pick_loads(s: str | None):
+    return json.loads(s) if s else None
+
+
+def _pick_dumps(p) -> str | None:
+    return json.dumps(p) if p else None
+
+
+def _persist_trade(t: dict):
+    db.update_trade(t["id"], a_pick=_pick_dumps(t["a_pick"]), b_pick=_pick_dumps(t["b_pick"]),
+                    a_ok=int(t["a_ok"]), b_ok=int(t["b_ok"]), stage=t.get("stage", "request"),
+                    a_name=t["a_name"], b_name=t["b_name"],
+                    channel_id=t.get("channel_id", ""), message_id=t.get("message_id", ""))
+
+
+def _mem_trade(row: dict) -> dict:
+    return {"id": row["id"], "a_id": int(row["a_id"]), "b_id": int(row["b_id"]),
+            "a_name": row["a_name"], "b_name": row["b_name"],
+            "a_pick": _pick_loads(row["a_pick"]), "b_pick": _pick_loads(row["b_pick"]),
+            "a_ok": bool(row["a_ok"]), "b_ok": bool(row["b_ok"]), "stage": row["stage"],
+            "channel_id": row["channel_id"], "message_id": row["message_id"], "message": None}
 
 
 def trade_embed(t: dict) -> discord.Embed:
@@ -1504,6 +1576,8 @@ class TradeRequestView(discord.ui.View):
             await interaction.response.send_message("This trade isn't for you!", ephemeral=True)
             return
         t["message"] = interaction.message
+        t["stage"] = "main"
+        _persist_trade(t)
         view = TradeMainView(self.tid)
         await interaction.response.edit_message(embed=trade_embed(t), view=view)
 
@@ -1516,12 +1590,14 @@ class TradeRequestView(discord.ui.View):
             await interaction.response.send_message("Not your trade!", ephemeral=True)
             return
         trades.pop(self.tid, None)
+        db.delete_trade(self.tid)
         for child in self.children:
             child.disabled = True
         await interaction.response.edit_message(content="❌ Trade declined.", embed=None, view=self)
 
     async def on_timeout(self):
         t = trades.pop(self.tid, None)
+        db.delete_trade(self.tid)
         if t and t.get("message"):
             try:
                 await t["message"].edit(content="⌛ Trade request expired.", embed=None, view=None)
@@ -1580,6 +1656,7 @@ class OfferQualitySelect(discord.ui.Select):
         rarity, quality = self.values[0].split("|")
         t[f"{self.side}_pick"] = {"rarity": rarity, "quality": quality, "ore": self.ore}
         t["a_ok"] = t["b_ok"] = False  # new offer resets accepts
+        _persist_trade(t)
         await interaction.response.edit_message(
             content=f"✅ Offer set: **{self.ore} ({quality})**. Back to the trade!", embed=None, view=None)
         try:
@@ -1646,6 +1723,7 @@ class TradeMainView(discord.ui.View):
             await interaction.response.send_message("Not your trade!", ephemeral=True)
             return
         trades.pop(self.tid, None)
+        db.delete_trade(self.tid)
         for child in self.children:
             child.disabled = True
         await interaction.response.edit_message(content="❌ Trade cancelled.", embed=None, view=self)
@@ -1663,6 +1741,7 @@ class TradeMainView(discord.ui.View):
                                                     ephemeral=True)
             return
         t[f"{side}_ok"] = True
+        _persist_trade(t)
         if t["a_ok"] and t["b_ok"]:
             await self._execute(interaction, t)
         else:
@@ -1680,12 +1759,14 @@ class TradeMainView(discord.ui.View):
             if ib is not None:
                 db.add_item(b, ib["rarity"], ib["quality"], ib["ore"], ib.get("origin", "spin"))
             trades.pop(t["id"], None)
+            db.delete_trade(t["id"])
             await interaction.response.edit_message(
                 content="❌ Trade failed — someone no longer has their ore.", embed=None, view=None)
             return
         db.add_item(b, ia["rarity"], ia["quality"], ia["ore"], ia.get("origin", "spin"))
         db.add_item(a, ib["rarity"], ib["quality"], ib["ore"], ib.get("origin", "spin"))
         trades.pop(t["id"], None)
+        db.delete_trade(t["id"])
         for child in self.children:
             child.disabled = True
         await interaction.response.edit_message(
@@ -1695,6 +1776,7 @@ class TradeMainView(discord.ui.View):
 
     async def on_timeout(self):
         t = trades.pop(self.tid, None)
+        db.delete_trade(self.tid)
         if t and t.get("message"):
             try:
                 await t["message"].edit(content="⌛ Trade expired.", embed=None, view=None)
@@ -1711,15 +1793,24 @@ async def trade(interaction: discord.Interaction, user: discord.User):
     if user.bot:
         await interaction.response.send_message("❌ You can't trade with a bot!", ephemeral=True)
         return
-    tid = _next_trade_id()
+    tid = db.create_trade(str(interaction.user.id), str(user.id),
+                          interaction.user.display_name, user.display_name)
     trades[tid] = {"id": tid, "a_id": interaction.user.id, "b_id": user.id,
                    "a_name": interaction.user.display_name, "b_name": user.display_name,
                    "a_pick": None, "b_pick": None, "a_ok": False, "b_ok": False,
-                   "message": None}
+                   "stage": "request", "channel_id": "", "message_id": "", "message": None}
     await interaction.response.send_message(
         f"{user.mention}, **{interaction.user.display_name}** wants to trade with you!\n"
         f"({interaction.user.display_name} can cancel from here too)",
         view=TradeRequestView(tid))
+    try:
+        msg = await interaction.original_response()
+        trades[tid]["message"] = msg
+        trades[tid]["channel_id"] = str(msg.channel.id)
+        trades[tid]["message_id"] = str(msg.id)
+        _persist_trade(trades[tid])
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

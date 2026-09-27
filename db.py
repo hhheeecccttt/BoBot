@@ -65,6 +65,21 @@ def init_db():
             unlocked_at TEXT NOT NULL DEFAULT (datetime('now')),
             PRIMARY KEY (user_id, ach_id)
         );
+        CREATE TABLE IF NOT EXISTS trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            a_id TEXT NOT NULL,
+            b_id TEXT NOT NULL,
+            a_name TEXT NOT NULL DEFAULT '',
+            b_name TEXT NOT NULL DEFAULT '',
+            a_pick TEXT,
+            b_pick TEXT,
+            a_ok INTEGER NOT NULL DEFAULT 0,
+            b_ok INTEGER NOT NULL DEFAULT 0,
+            stage TEXT NOT NULL DEFAULT 'request',
+            channel_id TEXT NOT NULL DEFAULT '',
+            message_id TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
         """)
         # --- migrations for DBs created before these columns existed ---
         for _table, _col, _ddl in (
@@ -444,6 +459,52 @@ def market_by_seller(seller_id: str, ore: str | None = None,
             f"SELECT * FROM market WHERE {' AND '.join(clauses)} ORDER BY id DESC LIMIT ?",
             (*params, limit)).fetchall()
         return [dict(r) for r in rows]
+
+# ---------- trades (persisted so restarts don't kill active trades) ----------
+
+def create_trade(a_id: str, b_id: str, a_name: str, b_name: str,
+                 channel_id: str = "", message_id: str = "") -> int:
+    with _lock, get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO trades (a_id, b_id, a_name, b_name, channel_id, message_id) VALUES (?,?,?,?,?,?)",
+            (a_id, b_id, a_name, b_name, channel_id, message_id),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def get_trade(tid: int) -> dict | None:
+    with _lock, get_conn() as conn:
+        row = conn.execute("SELECT * FROM trades WHERE id=?", (tid,)).fetchone()
+        return dict(row) if row else None
+
+
+def update_trade(tid: int, **fields):
+    if not fields:
+        return
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    with _lock, get_conn() as conn:
+        conn.execute(f"UPDATE trades SET {cols} WHERE id=?", (*fields.values(), tid))
+        conn.commit()
+
+
+def delete_trade(tid: int):
+    with _lock, get_conn() as conn:
+        conn.execute("DELETE FROM trades WHERE id=?", (tid,))
+        conn.commit()
+
+
+def open_trades() -> list[dict]:
+    with _lock, get_conn() as conn:
+        rows = conn.execute("SELECT * FROM trades ORDER BY id").fetchall()
+        return [dict(r) for r in rows]
+
+
+def max_trade_id() -> int:
+    with _lock, get_conn() as conn:
+        row = conn.execute("SELECT MAX(id) m FROM trades").fetchone()
+        return row["m"] or 0
+
 
 # ---------- achievements ----------
 

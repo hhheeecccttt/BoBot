@@ -128,3 +128,13 @@ def tier_name(rarity: str) -> str:
 def tier_index(rarity: str) -> int:
     """0 = lowest tier. Used to sort dropdowns low -> high."""
     return list(RARITIES.keys()).index(rarity)
+
+
+def rarity_one_in(chance: float) -> str:
+    """100/chance as whole numbers, except near-1 odds which get one decimal (1.4)."""
+    if chance <= 0:
+        return "∞"
+    exact = 100.0 / chance
+    if round(exact) == 1 and exact != 1:
+        return f"{exact:.1f}"
+    return f"{round(exact):,}"
