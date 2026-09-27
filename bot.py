@@ -1485,6 +1485,7 @@ class SettingSelect(discord.ui.Select):
                                                     ephemeral=True)
             return
         view.selected = self.values[0]
+        view.sync_select()
         await interaction.response.edit_message(
             embed=settings_embed(str(view.owner_id), view.selected), view=view)
 
@@ -1494,7 +1495,15 @@ class SettingsView(discord.ui.View):
         super().__init__(timeout=300)
         self.owner_id = owner_id
         self.selected = "inventory"
-        self.add_item(SettingSelect(self.selected))
+        self.setting_select = SettingSelect(self.selected)
+        self.add_item(self.setting_select)
+
+    def sync_select(self):
+        """Rebuild dropdown options so the shown selection matches."""
+        self.setting_select.options = [
+            discord.SelectOption(label=label, value=key, default=(key == self.selected))
+            for key, _, label in SETTING_DEFS
+        ]
 
     @discord.ui.button(label="Switch private/public", style=discord.ButtonStyle.primary, emoji="🔄")
     async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button):
