@@ -200,7 +200,7 @@ def inspect_text(uid: str, rarity: str, quality: str, ore: str, count: int) -> s
         f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
         f"Quicksell: **${value_each:,}** each (**${value_each * count:,}** for all)\n"
         f"{origin_line}"
-        f"Tip: `/quicksell` to sell, `/market_list` to list it for other players."
+        f"Tip: use the inventory **Quicksell** button, `/quicksell_all`, or `/market_list`."
     )
 
 
@@ -552,150 +552,6 @@ async def inventory(interaction: discord.Interaction, user: discord.User | None 
     name = await display_name(interaction, tid)
     embed, view = render_inventory(tid, name, interaction.user.id, public)
     await interaction.response.send_message(embed=embed, view=view, ephemeral=not public)
-
-
-@bot.tree.command(name="quicksell", description="Sell ores instantly (pick filters, then amount).")
-async def quicksell(interaction: discord.Interaction):
-    uid = str(interaction.user.id)
-    if not db.get_ores_overview(uid):
-        await interaction.response.send_message("🎒 Your inventory is empty! Use `/spin` first.",
-                                                ephemeral=True)
-        return
-    view = QuicksellView(interaction.user.id)
-    await interaction.response.send_message(embed=view.preview_embed(uid), view=view,
-                                            ephemeral=True)
-
-
-def quicksell_matches(uid: str, rarity: str | None, quality: str | None,
-                      ore: str | None) -> list[dict]:
-    items = db.get_inventory_grouped(uid)
-    return [i for i in items
-            if (rarity is None or i["rarity"] == rarity)
-            and (quality is None or i["quality"] == quality)
-            and (ore is None or i["ore"] == ore)]
-
-
-class QuicksellFilterSelect(discord.ui.Select):
-    """One dropdown each for rarity / quality / ore. Everything optional."""
-
-    def __init__(self, owner_id: int, kind: str):
-        self.owner_id = owner_id
-        self.kind = kind
-        uid = str(owner_id)
-        if kind == "rarity":
-            options = [discord.SelectOption(label="All rarities", value="all")]
-            for r in config.RARITIES:
-                options.append(discord.SelectOption(
-                    label=config.tier_name(r), value=r,
-                    emoji=config.RARITIES[r].get("dot", "")))
-            placeholder = "Rarity (optional)…"
-        elif kind == "quality":
-            options = [discord.SelectOption(label="All qualities", value="all")]
-            for q in config.QUALITIES:
-                options.append(discord.SelectOption(label=q, value=q))
-            placeholder = "Quality (optional)…"
-        else:
-            options = [discord.SelectOption(label="All ores", value="all")]
-            for o in db.get_ores_overview(uid)[:24]:
-                options.append(discord.SelectOption(label=o["ore"], value=o["ore"]))
-            placeholder = "Ore (optional)…"
-        super().__init__(placeholder=placeholder, options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        view: QuicksellView = self.view
-        if interaction.user.id != view.owner_id:
-            await interaction.response.send_message("That's not yours!", ephemeral=True)
-            return
-        val = self.values[0]
-        view.filters[self.kind] = None if val == "all" else val
-        await interaction.response.edit_message(
-            embed=view.preview_embed(str(view.owner_id)), view=view)
-
-
-class QuicksellAmountModal(discord.ui.Modal, title="Quicksell — how many?"):
-    amount = discord.ui.TextInput(label="Amount (number or ALL)", placeholder="e.g. 5 or ALL",
-                                  max_length=8)
-
-    def __init__(self, owner_id: int, rarity: str | None, quality: str | None, ore: str | None):
-        super().__init__()
-        self.owner_id = owner_id
-        self.rarity = rarity
-        self.quality = quality
-        self.ore = ore
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("That's not yours!", ephemeral=True)
-            return
-        uid = str(self.owner_id)
-        targets = quicksell_matches(uid, self.rarity, self.quality, self.ore)
-        if not targets:
-            await interaction.response.send_message("❌ Nothing matches anymore.", ephemeral=True)
-            return
-        raw = str(self.amount.value).strip().lower()
-        sell_all = raw in ("all", "max")
-        if not sell_all:
-            try:
-                limit = int(raw)
-            except ValueError:
-                await interaction.response.send_message("❌ Type a number or ALL.", ephemeral=True)
-                return
-            limit = max(0, limit)
-        sold, earned = 0, 0
-        for t in targets:
-            n = t["count"] if sell_all else min(limit - sold, t["count"])
-            if n <= 0:
-                break
-            for _ in range(n):
-                if db.remove_one_item(uid, t["rarity"], t["quality"], t["ore"]) is None:
-                    break
-                earned += config.quicksell_value(t["rarity"])
-                sold += 1
-            if not sell_all and sold >= limit:
-                break
-        u = db.get_user(uid)
-        db.update_user(uid, balance=u["balance"] + earned, total_earned=u["total_earned"] + earned)
-        newly = check_achievements(uid, db.get_user(uid), "", "")
-        await interaction.response.send_message(
-            f"💸 Sold **{sold}** ore(s) for **${earned:,}**! New balance: **${u['balance'] + earned:,}**.",
-            ephemeral=True)
-        if newly:
-            await interaction.followup.send(
-                f"{interaction.user.mention} 🏆 Achievement unlocked!\n" + "\n".join(newly),
-                ephemeral=True)
-
-
-class QuicksellView(discord.ui.View):
-    def __init__(self, owner_id: int):
-        super().__init__(timeout=300)
-        self.owner_id = owner_id
-        self.filters: dict[str, str | None] = {"rarity": None, "quality": None, "ore": None}
-        self.add_item(QuicksellFilterSelect(owner_id, "rarity"))
-        self.add_item(QuicksellFilterSelect(owner_id, "quality"))
-        self.add_item(QuicksellFilterSelect(owner_id, "ore"))
-
-    def preview_embed(self, uid: str) -> discord.Embed:
-        f = self.filters
-        targets = quicksell_matches(uid, f["rarity"], f["quality"], f["ore"])
-        n = sum(t["count"] for t in targets)
-        v = sum(config.quicksell_value(t["rarity"]) * t["count"] for t in targets)
-        r = f["rarity"] if f["rarity"] else "Any rarity"
-        q = f["quality"] if f["quality"] else "Any quality"
-        o = f["ore"] if f["ore"] else "Any ore"
-        embed = discord.Embed(title="💸 Quicksell",
-                              description=f"{r} • {q} • {o}\nMatches **{n}** ore(s) (~**${v:,}**)",
-                              color=0x4CAF50)
-        embed.set_footer(text="Pick filters (all optional), then hit Quicksell and type the amount.")
-        return embed
-
-    @discord.ui.button(label="Quicksell", style=discord.ButtonStyle.green, emoji="💸", row=3)
-    async def go(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("That's not yours!", ephemeral=True)
-            return
-        f = self.filters
-        await interaction.response.send_modal(
-            QuicksellAmountModal(self.owner_id, f["rarity"], f["quality"], f["ore"]))
 
 
 @bot.tree.command(name="quicksell_all", description="Sell your ENTIRE inventory instantly.")
@@ -1542,13 +1398,12 @@ async def help_cmd(interaction: discord.Interaction):
         f"🎰 `/spin` — roll an ore ({config.SPINS_PER_DAY}/day, resets 00:00 UTC)\n"
         "💰 `/balance` — your money\n"
         "🎒 `/inventory` — your ores + dropdown inspector\n"
-        "💸 `/quicksell` — sell ores (filters + amount picker)\n"
         "💸 `/quicksell_all` — sell everything instantly\n"
         "📦 `/market_list` — list an ore (dropdown picker)\n"
         "🏪 `/market_view` — browse, filter, inspect & buy\n"
         "🚫 `/market_cancel` — take down a listing (dropdown picker)\n"
         "🚫 `/market_cancel_all` — take down ALL listings\n"
-        "🔄 `/trade` — trade ores with another player\n"
+        "🔄 `/trade` — trade ores (one-sided OK, both accept)\n"
         "📊 `/stats` — spins, pulls, streak, balance\n"
         "🏆 `/achievements` — your badges\n"
         "🎲 `/odds` — rarities, odds, values\n"
@@ -1674,7 +1529,7 @@ def trade_embed(t: dict) -> discord.Embed:
     embed = discord.Embed(title=f"🔄 Trade #{t['id']}", color=0x00BCD4)
     embed.add_field(name=f"{a_ok} {t['a_name']}'s offer", value=fmt(t["a_pick"]), inline=True)
     embed.add_field(name=f"{b_ok} {t['b_name']}'s offer", value=fmt(t["b_pick"]), inline=True)
-    embed.set_footer(text="Both sides: set your offer, then both hit Accept. 1 ore each.")
+    embed.set_footer(text="Offers optional — one side can give nothing. Both hit Accept.")
     return embed
 
 
@@ -1855,8 +1710,8 @@ class TradeMainView(discord.ui.View):
         if who != side:
             await interaction.response.send_message("That's the other player's button!", ephemeral=True)
             return
-        if not t["a_pick"] or not t["b_pick"]:
-            await interaction.response.send_message("☝️ Both sides must set an offer first!",
+        if not t["a_pick"] and not t["b_pick"]:
+            await interaction.response.send_message("☝️ At least one side must offer something!",
                                                     ephemeral=True)
             return
         t[f"{side}_ok"] = True
@@ -1869,9 +1724,9 @@ class TradeMainView(discord.ui.View):
     async def _execute(self, interaction: discord.Interaction, t: dict):
         a, b = str(t["a_id"]), str(t["b_id"])
         pa, pb = t["a_pick"], t["b_pick"]
-        ia = db.take_one_item(a, pa["rarity"], pa["quality"], pa["ore"])
-        ib = db.take_one_item(b, pb["rarity"], pb["quality"], pb["ore"])
-        if ia is None or ib is None:
+        ia = db.take_one_item(a, pa["rarity"], pa["quality"], pa["ore"]) if pa else None
+        ib = db.take_one_item(b, pb["rarity"], pb["quality"], pb["ore"]) if pb else None
+        if (pa and ia is None) or (pb and ib is None):
             # rollback whatever was taken
             if ia is not None:
                 db.add_item(a, ia["rarity"], ia["quality"], ia["ore"], ia.get("origin", "spin"))
@@ -1882,16 +1737,24 @@ class TradeMainView(discord.ui.View):
             await interaction.response.edit_message(
                 content="❌ Trade failed — someone no longer has their ore.", embed=None, view=None)
             return
-        db.add_item(b, ia["rarity"], ia["quality"], ia["ore"], ia.get("origin", "spin"))
-        db.add_item(a, ib["rarity"], ib["quality"], ib["ore"], ib.get("origin", "spin"))
+        if ia is not None:
+            db.add_item(b, ia["rarity"], ia["quality"], ia["ore"], ia.get("origin", "spin"))
+        if ib is not None:
+            db.add_item(a, ib["rarity"], ib["quality"], ib["ore"], ib.get("origin", "spin"))
         trades.pop(t["id"], None)
         db.delete_trade(t["id"])
+        if ia is not None and ib is not None:
+            result = (f"🔄 **Trade complete!** {t['a_name']} got **{pb['ore']} ({pb['quality']})**, "
+                      f"{t['b_name']} got **{pa['ore']} ({pa['quality']})**.")
+        elif ia is not None:
+            result = (f"🎁 **{t['a_name']}** gave **{pa['ore']} ({pa['quality']})** "
+                      f"to **{t['b_name']}**!")
+        else:
+            result = (f"🎁 **{t['b_name']}** gave **{pb['ore']} ({pb['quality']})** "
+                      f"to **{t['a_name']}**!")
         for child in self.children:
             child.disabled = True
-        await interaction.response.edit_message(
-            content=f"🔄 **Trade complete!** {t['a_name']} got **{pb['ore']} ({pb['quality']})**, "
-                    f"{t['b_name']} got **{pa['ore']} ({pa['quality']})**.",
-            embed=None, view=self)
+        await interaction.response.edit_message(content=result, embed=None, view=self)
 
     async def on_timeout(self):
         t = trades.pop(self.tid, None)
@@ -1903,7 +1766,7 @@ class TradeMainView(discord.ui.View):
                 pass
 
 
-@bot.tree.command(name="trade", description="Trade ores with another player (1 for 1, both accept).")
+@bot.tree.command(name="trade", description="Trade ores with another player (one-sided OK, both accept).")
 @app_commands.describe(user="The player to trade with")
 async def trade(interaction: discord.Interaction, user: discord.User):
     if user.id == interaction.user.id:
