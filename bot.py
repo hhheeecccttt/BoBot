@@ -554,39 +554,148 @@ async def inventory(interaction: discord.Interaction, user: discord.User | None 
     await interaction.response.send_message(embed=embed, view=view, ephemeral=not public)
 
 
-@bot.tree.command(name="quicksell", description="Sell ores instantly for the lowest rarity value.")
-@app_commands.describe(rarity="Which rarity to sell", quality="Optional: only this quality",
-                       ore="Optional: only this ore name", amount="How many (default 1). Use 9999 for all.")
-@app_commands.choices(rarity=[app_commands.Choice(name=r, value=r) for r in config.RARITIES])
-async def quicksell(interaction: discord.Interaction, rarity: str, quality: str | None = None,
-                    ore: str | None = None, amount: int = 1):
-    await interaction.response.defer()
+@bot.tree.command(name="quicksell", description="Sell ores instantly (pick filters, then amount).")
+async def quicksell(interaction: discord.Interaction):
     uid = str(interaction.user.id)
-    items = db.get_inventory_grouped(uid)
-    targets = [i for i in items if i["rarity"] == rarity
-               and (quality is None or i["quality"].lower() == quality.lower())
-               and (ore is None or i["ore"].lower() == ore.lower())]
-    if not targets:
-        await interaction.followup.send("❌ You don't own anything matching that. Check `/inventory`.")
+    if not db.get_ores_overview(uid):
+        await interaction.response.send_message("🎒 Your inventory is empty! Use `/spin` first.",
+                                                ephemeral=True)
         return
-    sold, earned = 0, 0
-    for t in targets:
-        n = t["count"] if amount >= 9999 else min(amount - sold, t["count"])
-        if n <= 0:
-            break
-        for _ in range(n):
-            if db.remove_one_item(uid, t["rarity"], t["quality"], t["ore"]) is None:
+    view = QuicksellView(interaction.user.id)
+    await interaction.response.send_message(embed=view.preview_embed(uid), view=view,
+                                            ephemeral=True)
+
+
+def quicksell_matches(uid: str, rarity: str | None, quality: str | None,
+                      ore: str | None) -> list[dict]:
+    items = db.get_inventory_grouped(uid)
+    return [i for i in items
+            if (rarity is None or i["rarity"] == rarity)
+            and (quality is None or i["quality"] == quality)
+            and (ore is None or i["ore"] == ore)]
+
+
+class QuicksellFilterSelect(discord.ui.Select):
+    """One dropdown each for rarity / quality / ore. Everything optional."""
+
+    def __init__(self, owner_id: int, kind: str):
+        self.owner_id = owner_id
+        self.kind = kind
+        uid = str(owner_id)
+        if kind == "rarity":
+            options = [discord.SelectOption(label="All rarities", value="all")]
+            for r in config.RARITIES:
+                options.append(discord.SelectOption(
+                    label=config.tier_name(r), value=r,
+                    emoji=config.RARITIES[r].get("dot", "")))
+            placeholder = "Rarity (optional)…"
+        elif kind == "quality":
+            options = [discord.SelectOption(label="All qualities", value="all")]
+            for q in config.QUALITIES:
+                options.append(discord.SelectOption(label=q, value=q))
+            placeholder = "Quality (optional)…"
+        else:
+            options = [discord.SelectOption(label="All ores", value="all")]
+            for o in db.get_ores_overview(uid)[:24]:
+                options.append(discord.SelectOption(label=o["ore"], value=o["ore"]))
+            placeholder = "Ore (optional)…"
+        super().__init__(placeholder=placeholder, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: QuicksellView = self.view
+        if interaction.user.id != view.owner_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        val = self.values[0]
+        view.filters[self.kind] = None if val == "all" else val
+        await interaction.response.edit_message(
+            embed=view.preview_embed(str(view.owner_id)), view=view)
+
+
+class QuicksellAmountModal(discord.ui.Modal, title="Quicksell — how many?"):
+    amount = discord.ui.TextInput(label="Amount (number or ALL)", placeholder="e.g. 5 or ALL",
+                                  max_length=8)
+
+    def __init__(self, owner_id: int, rarity: str | None, quality: str | None, ore: str | None):
+        super().__init__()
+        self.owner_id = owner_id
+        self.rarity = rarity
+        self.quality = quality
+        self.ore = ore
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        uid = str(self.owner_id)
+        targets = quicksell_matches(uid, self.rarity, self.quality, self.ore)
+        if not targets:
+            await interaction.response.send_message("❌ Nothing matches anymore.", ephemeral=True)
+            return
+        raw = str(self.amount.value).strip().lower()
+        sell_all = raw in ("all", "max")
+        if not sell_all:
+            try:
+                limit = int(raw)
+            except ValueError:
+                await interaction.response.send_message("❌ Type a number or ALL.", ephemeral=True)
+                return
+            limit = max(0, limit)
+        sold, earned = 0, 0
+        for t in targets:
+            n = t["count"] if sell_all else min(limit - sold, t["count"])
+            if n <= 0:
                 break
-            earned += config.quicksell_value(t["rarity"])
-            sold += 1
-        if sold >= amount and amount < 9999:
-            break
-    u = db.get_user(uid)
-    db.update_user(uid, balance=u["balance"] + earned, total_earned=u["total_earned"] + earned)
-    newly = check_achievements(uid, db.get_user(uid), "", "")
-    await interaction.followup.send(f"💸 Sold **{sold}** ore(s) for **${earned:,}**! New balance: **${u['balance'] + earned:,}**.")
-    if newly:
-        await interaction.followup.send(f"{interaction.user.mention} 🏆 Achievement unlocked!\n" + "\n".join(newly))
+            for _ in range(n):
+                if db.remove_one_item(uid, t["rarity"], t["quality"], t["ore"]) is None:
+                    break
+                earned += config.quicksell_value(t["rarity"])
+                sold += 1
+            if not sell_all and sold >= limit:
+                break
+        u = db.get_user(uid)
+        db.update_user(uid, balance=u["balance"] + earned, total_earned=u["total_earned"] + earned)
+        newly = check_achievements(uid, db.get_user(uid), "", "")
+        await interaction.response.send_message(
+            f"💸 Sold **{sold}** ore(s) for **${earned:,}**! New balance: **${u['balance'] + earned:,}**.",
+            ephemeral=True)
+        if newly:
+            await interaction.followup.send(
+                f"{interaction.user.mention} 🏆 Achievement unlocked!\n" + "\n".join(newly),
+                ephemeral=True)
+
+
+class QuicksellView(discord.ui.View):
+    def __init__(self, owner_id: int):
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+        self.filters: dict[str, str | None] = {"rarity": None, "quality": None, "ore": None}
+        self.add_item(QuicksellFilterSelect(owner_id, "rarity"))
+        self.add_item(QuicksellFilterSelect(owner_id, "quality"))
+        self.add_item(QuicksellFilterSelect(owner_id, "ore"))
+
+    def preview_embed(self, uid: str) -> discord.Embed:
+        f = self.filters
+        targets = quicksell_matches(uid, f["rarity"], f["quality"], f["ore"])
+        n = sum(t["count"] for t in targets)
+        v = sum(config.quicksell_value(t["rarity"]) * t["count"] for t in targets)
+        r = f["rarity"] if f["rarity"] else "Any rarity"
+        q = f["quality"] if f["quality"] else "Any quality"
+        o = f["ore"] if f["ore"] else "Any ore"
+        embed = discord.Embed(title="💸 Quicksell",
+                              description=f"{r} • {q} • {o}\nMatches **{n}** ore(s) (~**${v:,}**)",
+                              color=0x4CAF50)
+        embed.set_footer(text="Pick filters (all optional), then hit Quicksell and type the amount.")
+        return embed
+
+    @discord.ui.button(label="Quicksell", style=discord.ButtonStyle.green, emoji="💸", row=3)
+    async def go(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        f = self.filters
+        await interaction.response.send_modal(
+            QuicksellAmountModal(self.owner_id, f["rarity"], f["quality"], f["ore"]))
 
 
 @bot.tree.command(name="quicksell_all", description="Sell your ENTIRE inventory instantly.")
@@ -1433,7 +1542,7 @@ async def help_cmd(interaction: discord.Interaction):
         f"🎰 `/spin` — roll an ore ({config.SPINS_PER_DAY}/day, resets 00:00 UTC)\n"
         "💰 `/balance` — your money\n"
         "🎒 `/inventory` — your ores + dropdown inspector\n"
-        "💸 `/quicksell` — sell matching ores instantly\n"
+        "💸 `/quicksell` — sell ores (filters + amount picker)\n"
         "💸 `/quicksell_all` — sell everything instantly\n"
         "📦 `/market_list` — list an ore (dropdown picker)\n"
         "🏪 `/market_view` — browse, filter, inspect & buy\n"

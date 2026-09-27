@@ -35,7 +35,7 @@ python3 bot.py
 | `/spin` | Roll rarity + quality + ore. Shows "1 in X". Has a 💸 quicksell button. 3/day, resets 00:00 UTC |
 | `/balance` | Your $ |
 | `/inventory [@user]` | Your ores (private unless you set public) + ore pages, quality filter, totals |
-| `/quicksell <rarity> [quality] [ore] [amount]` | Sell matching ores at flat rarity value |
+| `/quicksell` | Dropdown filters (rarity/quality/ore, all optional) + amount or ALL |
 | `/quicksell_all` | Sell everything |
 | `/market_list` | Pick an ore from a dropdown, set a price in the popup |
 | `/market_view` | Latest + dropdown filters (ore → quality → cheapest/average/priciest), pages, inspect + Buy button |
