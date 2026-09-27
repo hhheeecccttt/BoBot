@@ -2395,23 +2395,32 @@ def is_admin(interaction: discord.Interaction) -> bool:
 
 
 def install_killswitch():
-    """Wraps every slash command: when disabled, only admins can use anything."""
+    """Adds a global check to every slash command: when disabled, only admins can use anything."""
     for cmd in bot.tree.walk_commands():
-        if not isinstance(cmd, app_commands.Command):
-            continue
-        orig = cmd.callback
+        if isinstance(cmd, app_commands.Command):
+            cmd.add_check(_enabled_check)
 
-        @functools.wraps(orig)
-        async def wrapper(interaction: discord.Interaction, *args, _orig=orig, **kwargs):
-            if db.get_setting("commands_enabled") != "1" and not is_admin(interaction):
-                msg = "🔒 Commands are temporarily disabled by an admin."
-                if interaction.response.is_done():
-                    await interaction.followup.send(msg, ephemeral=True)
-                else:
-                    await interaction.response.send_message(msg, ephemeral=True)
-                return
-            return await _orig(interaction, *args, **kwargs)
-        cmd.callback = wrapper
+
+async def _enabled_check(interaction: discord.Interaction) -> bool:
+    if db.get_setting("commands_enabled") != "1" and not is_admin(interaction):
+        raise app_commands.CheckFailure("disabled")
+    return True
+
+
+@bot.tree.error
+async def on_app_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    err = error
+    if isinstance(err, app_commands.CommandInvokeError) and err.original is not None:
+        err = err.original
+    if isinstance(err, app_commands.CheckFailure):
+        msg = "🔒 Commands are temporarily disabled by an admin."
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+        except Exception:
+            pass
 
 
 @bot.tree.command(name="admin_give", description="[ADMIN] Give money to a player.")
