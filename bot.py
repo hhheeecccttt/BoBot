@@ -533,7 +533,7 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
             await interaction.followup.send(embed=embed)
     else:
         # summary for multi-spins: rarest pull first
-        best = min(pulls, key=lambda p: (order.index(p[0]),
+        best = max(pulls, key=lambda p: (order.index(p[0]),
                                          list(config.QUALITIES.keys()).index(p[1])))
         haul_value = sum(config.quicksell_value(p[0]) for p in pulls)
         lines = [f"{config.RARITIES[r]['dot']} {config.tier_name(r)} x{counts[r]}"
