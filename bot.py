@@ -75,8 +75,10 @@ def time_until_reset() -> str:
     return f"{h}h {m}m"
 
 
-def check_achievements(user_id: str, u: dict, rarity: str, quality: str) -> list[str]:
-    """Grant eligible achievements. Returns list of newly unlocked names."""
+def check_achievements(user_id: str, u: dict, rarity: str, quality: str,
+                       collectors: bool = True) -> list[str]:
+    """Grant eligible achievements. Returns list of newly unlocked names.
+    collectors=False skips the (expensive) collector scan — spin passes it once."""
     newly = []
 
     def grant(aid: str):
@@ -132,8 +134,9 @@ def check_achievements(user_id: str, u: dict, rarity: str, quality: str) -> list
     if u.get("buy_count", 0) >= 10:
         grant("customer_10")
     # collectors: own every ore of the tier right now (inventory + vault together)
-    for aid in current_collectors(user_id):
-        grant(aid)
+    if collectors:
+        for aid in current_collectors(user_id):
+            grant(aid)
     if u["streak"] >= 3:
         grant("streak_3")
     if u["streak"] >= 7:
@@ -145,7 +148,7 @@ def check_achievements(user_id: str, u: dict, rarity: str, quality: str) -> list
     if u["streak"] >= 365:
         grant("streak_365")
     # It's Over: everything else is done (grant() dedupes, so this is safe to check every time)
-    if len(db.get_achievements(user_id)) == len(config.ACHIEVEMENTS) - 1:
+    if collectors and len(db.get_achievements(user_id)) == len(config.ACHIEVEMENTS) - 1:
         grant("all_done")
     return newly
 
@@ -1009,12 +1012,7 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
     if spins_left_text is None:
         spins_left_text = "∞" if unlimited_day else f"{spins_per_day - u['spins_used_today']}/{spins_per_day}"
 
-    rarities_hit = {p[0] for p in pulls}
-    quals_hit = {p[1] for p in pulls}
-    newly: list[str] = []
-    # check per distinct (rarity, quality) pair so combo achievements (Jackpot) can fire
-    for r, q in sorted(set(pulls)):
-        newly += check_achievements(uid, u, r, q)
+    ping = await _spin_ping(uid, interaction)
 
     if n == 1:
         rarity, quality, ore = pulls[0]
@@ -1032,10 +1030,9 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
         if item_id is not None:
             view = SpinView(interaction.user.id, item_id, rarity, quality, ore)
             view.children[0].label = f"Quicksell ${value:,}"
-            await interaction.followup.send(content=await _spin_ping(uid, interaction),
-                                            embed=embed, view=view)
+            await interaction.followup.send(content=ping, embed=embed, view=view)
         else:
-            await interaction.followup.send(content=await _spin_ping(uid, interaction), embed=embed)
+            await interaction.followup.send(content=ping, embed=embed)
     else:
         # summary for multi-spins: rarest pull first
         best = max(pulls, key=lambda p: (order.index(p[0]),
@@ -1052,7 +1049,14 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
         embed.add_field(name="💰 Haul quicksell value", value=f"${haul_value:,}", inline=True)
         embed.add_field(name="🎰 Spins left today", value=spins_left_text, inline=True)
         embed.set_footer(text=f"🔥 {u['streak']}-day streak • {interaction.user.display_name}")
-        await interaction.followup.send(content=await _spin_ping(uid, interaction), embed=embed)
+        await interaction.followup.send(content=ping, embed=embed)
+    # achievements AFTER the result so "thinking" always resolves fast;
+    # collectors scanned once (first pair) instead of per pair
+    newly: list[str] = []
+    first = True
+    for r, q in sorted(set(pulls)):
+        newly += check_achievements(uid, u, r, q, collectors=first)
+        first = False
     if newly:
         # de-dupe (multiple checks can grant different achievements; same one can't double-grant)
         seen, unique = set(), []
