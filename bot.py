@@ -256,11 +256,13 @@ async def inspect_text(interaction: discord.Interaction, uid: str, rarity: str, 
 # Buttons appear whenever scoped (an ore picked and/or a quality picked),
 # i.e. everywhere EXCEPT all-qualities + all-ores.
 
-def _scope_targets(uid: str, source: str, ore: str | None, quality: str | None) -> list[dict]:
+def _scope_targets(uid: str, source: str, ore: str | None, quality: str | None,
+                   tier: str | None = None) -> list[dict]:
     items = db.get_inventory_grouped(uid) if source == "inv" else db.vault_grouped(uid)
     return [i for i in items
             if (ore is None or i["ore"] == ore)
-            and (quality is None or i["quality"] == quality)]
+            and (quality is None or i["quality"] == quality)
+            and (tier is None or i["rarity"] == tier)]
 
 
 class ScopeQuicksellModal(discord.ui.Modal, title="Quicksell"):
@@ -268,18 +270,19 @@ class ScopeQuicksellModal(discord.ui.Modal, title="Quicksell"):
     amount = discord.ui.TextInput(label="How many? (number or ALL)", placeholder="e.g. 5 or ALL",
                                   max_length=8)
 
-    def __init__(self, owner_id: int, ore: str | None, quality: str | None):
+    def __init__(self, owner_id: int, ore: str | None, quality: str | None, tier: str | None = None):
         super().__init__()
         self.owner_id = owner_id
         self.ore = ore
         self.quality = quality
+        self.tier = tier
 
     async def on_submit(self, interaction: discord.Interaction):
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message("That's not yours!", ephemeral=True)
             return
         uid = str(self.owner_id)
-        targets = _scope_targets(uid, "inv", self.ore, self.quality)
+        targets = _scope_targets(uid, "inv", self.ore, self.quality, self.tier)
         if not targets:
             await interaction.response.send_message("❌ Nothing to sell.", ephemeral=True)
             return
@@ -320,18 +323,19 @@ class ScopeVaultModal(discord.ui.Modal, title="Vault — how many?"):
     amount = discord.ui.TextInput(label="How many? (number or ALL)", placeholder="e.g. 5 or ALL",
                                   max_length=8)
 
-    def __init__(self, owner_id: int, ore: str | None, quality: str | None):
+    def __init__(self, owner_id: int, ore: str | None, quality: str | None, tier: str | None = None):
         super().__init__()
         self.owner_id = owner_id
         self.ore = ore
         self.quality = quality
+        self.tier = tier
 
     async def on_submit(self, interaction: discord.Interaction):
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message("That's not yours!", ephemeral=True)
             return
         uid = str(self.owner_id)
-        targets = _scope_targets(uid, "inv", self.ore, self.quality)
+        targets = _scope_targets(uid, "inv", self.ore, self.quality, self.tier)
         if not targets:
             await interaction.response.send_message("❌ Nothing to store.", ephemeral=True)
             return
@@ -371,18 +375,19 @@ class ScopeUnvaultModal(discord.ui.Modal, title="Un-vault — how many?"):
     amount = discord.ui.TextInput(label="How many? (number or ALL)", placeholder="e.g. 5 or ALL",
                                   max_length=8)
 
-    def __init__(self, owner_id: int, ore: str | None, quality: str | None):
+    def __init__(self, owner_id: int, ore: str | None, quality: str | None, tier: str | None = None):
         super().__init__()
         self.owner_id = owner_id
         self.ore = ore
         self.quality = quality
+        self.tier = tier
 
     async def on_submit(self, interaction: discord.Interaction):
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message("That's not yours!", ephemeral=True)
             return
         uid = str(self.owner_id)
-        targets = _scope_targets(uid, "vault", self.ore, self.quality)
+        targets = _scope_targets(uid, "vault", self.ore, self.quality, self.tier)
         if not targets:
             await interaction.response.send_message("❌ Nothing to take.", ephemeral=True)
             return
@@ -415,6 +420,28 @@ class ScopeUnvaultModal(discord.ui.Modal, title="Un-vault — how many?"):
                 break
         await interaction.response.send_message(
             f"📦 Took **{moved}** ore(s) out of your vault!", ephemeral=True)
+
+
+class BrowserTierSelect(discord.ui.Select):
+    def __init__(self, current: str | None):
+        super().__init__(placeholder="Filter by tier…", options=[
+            discord.SelectOption(label="All tiers", value="all", default=(current is None))
+        ] + [discord.SelectOption(label=config.tier_name(r), value=r,
+                                   default=(r == current),
+                                   emoji=config.RARITIES[r].get("dot", ""))
+             for r in config.RARITIES])
+
+    async def callback(self, interaction: discord.Interaction):
+        view: InvBrowser = self.view
+        if interaction.user.id != view.viewer_id:
+            await interaction.response.send_message("That's not yours! Run `/inventory` yourself.",
+                                                    ephemeral=True)
+            return
+        view.tier = None if self.values[0] == "all" else self.values[0]
+        view.ore = None
+        view.selected = None
+        embed = view.render()
+        await interaction.response.edit_message(embed=embed, view=view)
 
 
 class BrowserQualitySelect(discord.ui.Select):
@@ -497,7 +524,8 @@ class InvBrowser(discord.ui.View):
     """
 
     def __init__(self, viewer_id: int, target_id: int, target_name: str, public: bool,
-                 source: str = "inv", quality: str | None = None, ore: str | None = None):
+                 source: str = "inv", quality: str | None = None, ore: str | None = None,
+                 tier: str | None = None):
         super().__init__(timeout=300)
         self.viewer_id = viewer_id
         self.target_id = target_id
@@ -506,6 +534,7 @@ class InvBrowser(discord.ui.View):
         self.source = source
         self.quality = quality
         self.ore = ore
+        self.tier = tier
         self.selected = None
         self._rebuild()
 
@@ -519,6 +548,8 @@ class InvBrowser(discord.ui.View):
                 ores = db.vault_by_quality(str(self.target_id), self.quality)
             else:
                 ores = db.vault_overview(str(self.target_id))
+        if self.tier:
+            ores = [o for o in ores if self.tier in o["rarities"]]
         ores.sort(key=lambda o: (min(config.tier_index(r) for r in o["rarities"]), -o["count"]))
         return ores
 
@@ -526,28 +557,19 @@ class InvBrowser(discord.ui.View):
         if not self.ore:
             return []
         if self.source == "inv":
-            return db.get_ore_detail(str(self.target_id), self.ore, self.quality)
-        rows = db.vault_detail(str(self.target_id), self.ore)
-        if self.quality:
-            rows = [r for r in rows if r["quality"] == self.quality]
+            rows = db.get_ore_detail(str(self.target_id), self.ore, self.quality)
+        else:
+            rows = db.vault_detail(str(self.target_id), self.ore)
+            if self.quality:
+                rows = [r for r in rows if r["quality"] == self.quality]
+        if self.tier:
+            rows = [r for r in rows if r["rarity"] == self.tier]
         return rows
 
     def totals(self) -> tuple[int, int]:
-        if self.source == "inv":
-            return db.inventory_value(str(self.target_id), self.ore, self.quality)
-        n, v = db.vault_value(str(self.target_id), self.ore)
-        if self.quality and self.ore:
-            rows = [r for r in db.vault_detail(str(self.target_id), self.ore)
-                    if r["quality"] == self.quality]
-            n = sum(r["count"] for r in rows)
-            v = sum(config.quicksell_value(r["rarity"]) * r["count"] for r in rows)
-        elif self.quality:
-            n = v = 0
-            for o in db.vault_by_quality(str(self.target_id), self.quality):
-                for r in db.vault_detail(str(self.target_id), o["ore"]):
-                    if r["quality"] == self.quality:
-                        n += r["count"]
-                        v += config.quicksell_value(r["rarity"]) * r["count"]
+        rows = _scope_targets(str(self.target_id), self.source, self.ore, self.quality, self.tier)
+        n = sum(r["count"] for r in rows)
+        v = sum(config.quicksell_value(r["rarity"]) * r["count"] for r in rows)
         return n, v
 
     # ----- render -----
@@ -577,6 +599,8 @@ class InvBrowser(discord.ui.View):
                 for o in ores[:25]) or "Empty!"
         if self.quality:
             title += f" — {self.quality} only"
+        if self.tier:
+            title += f" — {config.tier_name(self.tier)}"
         if len(ores) > 25 and not self.ore:
             desc += f"\n-# Showing 25 of {len(ores)} ores."
         self._rebuild(ores, stacks)
@@ -589,6 +613,7 @@ class InvBrowser(discord.ui.View):
             ores = self.overviews()
         if stacks is None:
             stacks = self.stacks()
+        self.add_item(BrowserTierSelect(self.tier))
         self.add_item(BrowserOreSelect(ores, self.ore))
         self.add_item(BrowserQualitySelect(self.quality))
         if self.ore and stacks:
@@ -596,7 +621,7 @@ class InvBrowser(discord.ui.View):
                 self.selected = (stacks[0]["rarity"], stacks[0]["quality"])
             self.add_item(BrowserInspectSelect(stacks))
         mine = self.viewer_id == self.target_id
-        scoped = self.ore is not None or self.quality is not None
+        scoped = self.ore is not None or self.quality is not None or self.tier is not None
         if mine and scoped:
             if self.source == "inv":
                 self.add_item(self._qs_btn())
@@ -612,7 +637,7 @@ class InvBrowser(discord.ui.View):
                 await interaction.response.send_message("That's not yours!", ephemeral=True)
                 return
             await interaction.response.send_modal(
-                ScopeQuicksellModal(view.viewer_id, view.ore, view.quality))
+                ScopeQuicksellModal(view.viewer_id, view.ore, view.quality, view.tier))
         btn = discord.ui.Button(label="Quicksell", style=discord.ButtonStyle.green, emoji="💸")
         btn.callback = cb
         return btn
@@ -625,7 +650,7 @@ class InvBrowser(discord.ui.View):
                 await interaction.response.send_message("That's not yours!", ephemeral=True)
                 return
             await interaction.response.send_modal(
-                ScopeVaultModal(view.viewer_id, view.ore, view.quality))
+                ScopeVaultModal(view.viewer_id, view.ore, view.quality, view.tier))
         btn = discord.ui.Button(label="Vault", style=discord.ButtonStyle.secondary, emoji="🗝️")
         btn.callback = cb
         return btn
@@ -638,7 +663,7 @@ class InvBrowser(discord.ui.View):
                 await interaction.response.send_message("That's not yours!", ephemeral=True)
                 return
             await interaction.response.send_modal(
-                ScopeUnvaultModal(view.viewer_id, view.ore, view.quality))
+                ScopeUnvaultModal(view.viewer_id, view.ore, view.quality, view.tier))
         btn = discord.ui.Button(label="Un-vault", style=discord.ButtonStyle.primary, emoji="📦")
         btn.callback = cb
         return btn
@@ -1043,23 +1068,51 @@ class MarketPriceModal(discord.ui.Modal, title="Set your price"):
         )
 
 
-class MarketSellSelect(discord.ui.Select):
-    """Level 1: pick which ore to list (same look as inventory)."""
-
-    def __init__(self, owner_id: int, ores: list[dict]):
+class MarketSellTierSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, current: str | None = None):
         self.owner_id = owner_id
-        options = []
-        for o in ores[:25]:  # Discord limit
-            label = f"{ore_tier_label(o['ore'], o['rarities'])} x{o['count']}"[:100]
-            options.append(discord.SelectOption(label=label, value=o["ore"]))
-        super().__init__(placeholder="Choose which ore to list…", options=options)
+        super().__init__(placeholder="Filter by tier…", options=[
+            discord.SelectOption(label="All tiers", value="all", default=(current is None))
+        ] + [discord.SelectOption(label=config.tier_name(r), value=r,
+                                   default=(r == current),
+                                   emoji=config.RARITIES[r].get("dot", ""))
+             for r in config.RARITIES])
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message("That's not your inventory!", ephemeral=True)
             return
+        view: MarketSellView = self.view
+        view.tier = None if self.values[0] == "all" else self.values[0]
+        view.refresh_ores()
+        await interaction.response.edit_message(embed=view.make_embed(), view=view)
+
+
+class MarketSellSelect(discord.ui.Select):
+    """Level 1: pick which ore to list (same look as inventory)."""
+
+    def __init__(self, owner_id: int, ores: list[dict], tier: str | None = None):
+        self.owner_id = owner_id
+        self.tier = tier
+        if tier:
+            ores = [o for o in ores if tier in o["rarities"]]
+        options = []
+        for o in ores[:25]:  # Discord limit
+            label = f"{ore_tier_label(o['ore'], o['rarities'])} x{o['count']}"[:100]
+            options.append(discord.SelectOption(label=label, value=o["ore"]))
+        super().__init__(placeholder="Choose which ore to list…", options=options or [
+            discord.SelectOption(label="(nothing in this tier)", value="none")])
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("That's not your inventory!", ephemeral=True)
+            return
+        if self.values[0] == "none":
+            return
         ore = self.values[0]
         stacks = db.get_ore_detail(str(self.owner_id), ore)
+        if self.tier:
+            stacks = [s for s in stacks if s["rarity"] == self.tier]
         if not stacks:
             await interaction.response.send_message("Nothing there anymore.", ephemeral=True)
             return
@@ -1119,8 +1172,27 @@ class ListOrePageView(discord.ui.View):
 class MarketSellView(discord.ui.View):
     def __init__(self, owner_id: int, ores: list[dict]):
         super().__init__(timeout=180)
+        self.owner_id = owner_id
+        self.ores = ores
+        self.tier = None
+        self.add_item(MarketSellTierSelect(owner_id))
         if ores:
             self.add_item(MarketSellSelect(owner_id, ores))
+
+    def make_embed(self) -> discord.Embed:
+        ores = self.ores
+        if self.tier:
+            ores = [o for o in ores if self.tier in o["rarities"]]
+        desc = "\n".join(f"**{ore_tier_label(o['ore'], o['rarities'])}** x{o['count']}"
+                         for o in ores[:25]) or "Nothing in this tier!"
+        title = "📦 List an ore" + (f" — {config.tier_name(self.tier)}" if self.tier else "")
+        return discord.Embed(title=title, description=desc, color=0x4CAF50)
+
+    def refresh_ores(self):
+        for child in self.children:
+            if isinstance(child, MarketSellSelect):
+                self.remove_item(child)
+        self.add_item(MarketSellSelect(self.owner_id, self.ores, self.tier))
 
 
 @bot.tree.command(name="market_list", description="List one of your ores on the player market (pick from dropdown).")
@@ -1163,44 +1235,59 @@ async def format_listings(interaction: discord.Interaction, listings: list[dict]
 
 async def render_market(owner_id: int, interaction: discord.Interaction,
                         ore: str | None = None, quality: str | None = None,
-                        sort: str | None = None, page: int = 0):
+                        sort: str | None = None, page: int = 0, tier: str | None = None):
     """One renderer for every market stage. Returns (embed, view)."""
     all_listings = db.market_browse(ore=ore, quality=quality, sort=sort or "new",
-                                    limit=BROWSE_LIMIT)
+                                    limit=BROWSE_LIMIT, tier=tier)
     pages = max(1, (len(all_listings) + PAGE_SIZE - 1) // PAGE_SIZE)
     page = page % pages
     chunk = all_listings[page * PAGE_SIZE:page * PAGE_SIZE + PAGE_SIZE]
     lines = await format_listings(interaction, chunk)
+    scope = " — ".join(x for x in (
+        f"{ore}" if ore else None,
+        f"({quality})" if quality else None,
+        config.tier_name(tier) if tier else None) if x)
     if not sort or sort == "new":
-        if quality is None and ore is None:
-            title = "🏪 Player Market — latest"
-        elif ore is None:
-            title = f"🏪 {quality} — latest (all ores)"
-        elif quality is None:
-            title = f"🏪 {ore} — latest"
-        else:
-            title = f"🏪 {ore} ({quality}) — latest"
+        title = f"🏪 {scope + ' — ' if scope else ''}latest"
     else:
         label = {"cheapest": "cheapest", "average": "closest to average",
                  "expensive": "most expensive"}[sort]
-        if ore is None:
-            title = f"🏪 {quality} — {label} (all ores)"
-        else:
-            title = f"🏪 {ore} ({quality}) — {label}"
+        title = f"🏪 {scope + ' — ' if scope else ''}{label}"
     if pages > 1:
         title += f" (page {page + 1}/{pages})"
     embed = discord.Embed(title=title, description="\n".join(lines) if lines else "Sold out!",
                           color=0x9C27B0)
     embed.set_footer(text="Inspect a listing, then hit Buy • flip pages with ◀ ▶")
     return embed, MarketBrowser(owner_id, ore=ore, quality=quality, sort=sort,
-                                page=page, pages=pages, chunk=chunk)
+                                page=page, pages=pages, chunk=chunk, tier=tier)
+
+
+class MarketTierSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, current: str | None = None):
+        self.owner_id = owner_id
+        super().__init__(placeholder="Filter by tier…", options=[
+            discord.SelectOption(label="All tiers", value="all", default=(current is None))
+        ] + [discord.SelectOption(label=config.tier_name(r), value=r,
+                                   default=(r == current),
+                                   emoji=config.RARITIES[r].get("dot", ""))
+             for r in config.RARITIES])
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Use `/market_view` to browse yourself!", ephemeral=True)
+            return
+        tier = None if self.values[0] == "all" else self.values[0]
+        # changing tier resets ore (ore may not exist in that tier)
+        embed, view = await render_market(self.owner_id, interaction, tier=tier)
+        await interaction.response.edit_message(embed=embed, view=view)
 
 
 class MarketQualityTopSelect(discord.ui.Select):
     """Stage 0 second dropdown: filter by quality across ALL ores."""
 
-    def __init__(self, owner_id: int, current: str | None = None):
+    def __init__(self, owner_id: int, current: str | None = None, tier: str | None = None):
         self.owner_id = owner_id
+        self.tier = tier
         super().__init__(placeholder="Filter by quality…", options=[
             discord.SelectOption(label="All qualities", value="all", default=(current is None))
         ] + [discord.SelectOption(label=q, value=q, default=(q == current))
@@ -1211,17 +1298,20 @@ class MarketQualityTopSelect(discord.ui.Select):
             await interaction.response.send_message("Use `/market_view` to browse yourself!", ephemeral=True)
             return
         if self.values[0] == "all":
-            embed, view = await render_market(self.owner_id, interaction)
+            embed, view = await render_market(self.owner_id, interaction, tier=self.tier)
         else:
             embed, view = await render_market(self.owner_id, interaction,
-                                              quality=self.values[0])
+                                              quality=self.values[0], tier=self.tier)
         await interaction.response.edit_message(embed=embed, view=view)
 
 
 class MarketOreFilterSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, current: str | None = None):
+    def __init__(self, owner_id: int, current: str | None = None, tier: str | None = None):
         self.owner_id = owner_id
+        self.tier = tier
         ores = db.market_ores_with_rarity()
+        if tier:
+            ores = [o for o in ores if tier in o["rarities"]]
         # lowest tier first
         ores.sort(key=lambda o: min(config.tier_index(r) for r in o["rarities"]))
         options = [discord.SelectOption(label="All ores", value="all", default=(current is None))]
@@ -1240,16 +1330,19 @@ class MarketOreFilterSelect(discord.ui.Select):
         if self.values[0] == "none":
             return
         if self.values[0] == "all":
-            embed, view = await render_market(self.owner_id, interaction)
+            embed, view = await render_market(self.owner_id, interaction, tier=self.tier)
         else:
-            embed, view = await render_market(self.owner_id, interaction, ore=self.values[0])
+            embed, view = await render_market(self.owner_id, interaction,
+                                              ore=self.values[0], tier=self.tier)
         await interaction.response.edit_message(embed=embed, view=view)
 
 
 class MarketQualityFilterSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, ore: str, current: str | None = None):
+    def __init__(self, owner_id: int, ore: str, current: str | None = None,
+                 tier: str | None = None):
         self.owner_id = owner_id
         self.ore = ore
+        self.tier = tier
         quals = db.market_qualities(ore)
         options = [discord.SelectOption(label=q, value=q, default=(q == current))
                    for q in quals[:25]]
@@ -1263,15 +1356,17 @@ class MarketQualityFilterSelect(discord.ui.Select):
         if self.values[0] == "none":
             return
         embed, view = await render_market(self.owner_id, interaction,
-                                          ore=self.ore, quality=self.values[0])
+                                          ore=self.ore, quality=self.values[0], tier=self.tier)
         await interaction.response.edit_message(embed=embed, view=view)
 
 
 class MarketSortSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, ore: str, quality: str, current: str | None):
+    def __init__(self, owner_id: int, ore: str, quality: str, current: str | None,
+                 tier: str | None = None):
         self.owner_id = owner_id
         self.ore = ore
         self.quality = quality
+        self.tier = tier
         super().__init__(placeholder="Sort…", options=[
             discord.SelectOption(label="Latest", value="new", emoji="🆕",
                                  default=(current in (None, "new"))),
@@ -1288,7 +1383,8 @@ class MarketSortSelect(discord.ui.Select):
             await interaction.response.send_message("Use `/market_view` to browse yourself!", ephemeral=True)
             return
         embed, view = await render_market(self.owner_id, interaction, ore=self.ore,
-                                          quality=self.quality, sort=self.values[0], page=0)
+                                          quality=self.quality, sort=self.values[0], page=0,
+                                          tier=self.tier)
         await interaction.response.edit_message(embed=embed, view=view)
 
 
@@ -1413,7 +1509,7 @@ class MarketBrowser(discord.ui.View):
 
     def __init__(self, owner_id: int, ore: str | None = None, quality: str | None = None,
                  sort: str | None = None, page: int = 0, pages: int = 1,
-                 chunk: list[dict] | None = None):
+                 chunk: list[dict] | None = None, tier: str | None = None):
         super().__init__(timeout=300)
         self.owner_id = owner_id
         self.ore = ore
@@ -1421,19 +1517,19 @@ class MarketBrowser(discord.ui.View):
         self.sort = sort
         self.page = page
         self.pages = pages
+        self.tier = tier
+        self.add_item(MarketTierSelect(owner_id, current=tier))
         if ore is None and quality is None:
-            self.add_item(MarketOreFilterSelect(owner_id))
-            self.add_item(MarketQualityTopSelect(owner_id))
+            self.add_item(MarketOreFilterSelect(owner_id, tier=tier))
+            self.add_item(MarketQualityTopSelect(owner_id, tier=tier))
         elif quality is None:
-            self.add_item(MarketOreFilterSelect(owner_id, current=ore))
-            self.add_item(MarketQualityFilterSelect(owner_id, ore))
+            self.add_item(MarketOreFilterSelect(owner_id, current=ore, tier=tier))
+            self.add_item(MarketQualityFilterSelect(owner_id, ore, tier=tier))
         elif ore is None:
-            self.add_item(MarketQualityTopSelect(owner_id, current=quality))
-            self.add_item(MarketSortSelect(owner_id, ore, quality, sort))
+            self.add_item(MarketQualityTopSelect(owner_id, current=quality, tier=tier))
         else:
-            self.add_item(MarketOreFilterSelect(owner_id, current=ore))
-            self.add_item(MarketQualityFilterSelect(owner_id, ore, current=quality))
-            self.add_item(MarketSortSelect(owner_id, ore, quality, sort))
+            # filtered: tier + sort stay (drill-downs one tier-pick away — row limit)
+            self.add_item(MarketSortSelect(owner_id, ore, quality, sort, tier=tier))
         if chunk:
             self.add_item(MarketListingInspectSelect(chunk))
 
@@ -1444,7 +1540,7 @@ class MarketBrowser(discord.ui.View):
             return
         embed, view = await render_market(self.owner_id, interaction, ore=self.ore,
                                           quality=self.quality, sort=self.sort,
-                                          page=self.page + delta)
+                                          page=self.page + delta, tier=self.tier)
         await interaction.response.edit_message(embed=embed, view=view)
 
     @discord.ui.button(label="", emoji="◀", style=discord.ButtonStyle.secondary, row=4)
@@ -1497,16 +1593,19 @@ def cancel_lines(listings: list[dict], selected_id: int | None = None) -> list[s
 
 
 def render_cancel(owner_id: str, ore: str | None, quality: str | None,
-                  listings: list[dict] | None = None, selected_id: int | None = None):
+                  listings: list[dict] | None = None, selected_id: int | None = None,
+                  tier: str | None = None):
     """Build the cancel embed + view for a stage. Falls back to stage 1 if empty."""
     if listings is None:
-        listings = db.market_by_seller(owner_id, ore, quality, limit=10)
+        listings = db.market_by_seller(owner_id, ore, quality, limit=10, tier=tier)
     if not listings:
         # fall back to your latest 10 overall
-        ore, quality, selected_id = None, None, None
+        ore, quality, selected_id, tier = None, None, None, None
         listings = db.market_by_seller(owner_id, limit=10)
-    if ore is None:
+    if ore is None and tier is None:
         title = "🚫 Your listings — latest 10"
+    elif ore is None:
+        title = f"🚫 Your {config.tier_name(tier)} listings — latest 10"
     elif quality is None:
         title = f"🚫 Your {ore} — latest 10"
     else:
@@ -1514,13 +1613,35 @@ def render_cancel(owner_id: str, ore: str | None, quality: str | None,
     embed = discord.Embed(title=title, description="\n".join(cancel_lines(listings, selected_id))
                           if listings else "Nothing here!", color=0xF44336)
     return embed, CancelBrowser(int(owner_id), ore=ore, quality=quality,
-                                listings=listings, selected_id=selected_id)
+                                listings=listings, selected_id=selected_id, tier=tier)
+
+
+class CancelTierSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, current: str | None = None):
+        self.owner_id = owner_id
+        super().__init__(placeholder="Filter by tier…", options=[
+            discord.SelectOption(label="All tiers", value="all", default=(current is None))
+        ] + [discord.SelectOption(label=config.tier_name(r), value=r,
+                                   default=(r == current),
+                                   emoji=config.RARITIES[r].get("dot", ""))
+             for r in config.RARITIES])
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        tier = None if self.values[0] == "all" else self.values[0]
+        embed, view = render_cancel(str(self.owner_id), None, None, tier=tier)
+        await interaction.response.edit_message(embed=embed, view=view)
 
 
 class CancelOreSelect(discord.ui.Select):
-    def __init__(self, owner_id: int):
+    def __init__(self, owner_id: int, tier: str | None = None):
         self.owner_id = owner_id
+        self.tier = tier
         ores = db.market_seller_ores(str(owner_id))
+        if tier:
+            ores = [o for o in ores if tier in o["rarities"]]
         ores.sort(key=lambda o: min(config.tier_index(r) for r in o["rarities"]))
         options = []
         for o in ores[:25]:
@@ -1536,14 +1657,15 @@ class CancelOreSelect(discord.ui.Select):
             return
         if self.values[0] == "none":
             return
-        embed, view = render_cancel(str(self.owner_id), self.values[0], None)
+        embed, view = render_cancel(str(self.owner_id), self.values[0], None, tier=self.tier)
         await interaction.response.edit_message(embed=embed, view=view)
 
 
 class CancelQualitySelect(discord.ui.Select):
-    def __init__(self, owner_id: int, ore: str):
+    def __init__(self, owner_id: int, ore: str, tier: str | None = None):
         self.owner_id = owner_id
         self.ore = ore
+        self.tier = tier
         quals = db.market_seller_qualities(str(owner_id), ore)
         options = [discord.SelectOption(label=q, value=q) for q in quals[:25]]
         super().__init__(placeholder="Filter by quality…", options=options or [
@@ -1555,7 +1677,7 @@ class CancelQualitySelect(discord.ui.Select):
             return
         if self.values[0] == "none":
             return
-        embed, view = render_cancel(str(self.owner_id), self.ore, self.values[0])
+        embed, view = render_cancel(str(self.owner_id), self.ore, self.values[0], tier=self.tier)
         await interaction.response.edit_message(embed=embed, view=view)
 
 
@@ -1587,17 +1709,20 @@ class CancelListingSelect(discord.ui.Select):
 
 class CancelBrowser(discord.ui.View):
     def __init__(self, owner_id: int, ore: str | None = None, quality: str | None = None,
-                 listings: list[dict] | None = None, selected_id: int | None = None):
+                 listings: list[dict] | None = None, selected_id: int | None = None,
+                 tier: str | None = None):
         super().__init__(timeout=300)
         self.owner_id = owner_id
         self.ore = ore
         self.quality = quality
+        self.tier = tier
         self.listings = listings or []
         self.selected_id = selected_id
+        self.add_item(CancelTierSelect(owner_id, current=tier))
         if ore is None:
-            self.add_item(CancelOreSelect(owner_id))
+            self.add_item(CancelOreSelect(owner_id, tier=tier))
         elif quality is None:
-            self.add_item(CancelQualitySelect(owner_id, ore))
+            self.add_item(CancelQualitySelect(owner_id, ore, tier=tier))
         if self.listings:
             self.add_item(CancelListingSelect(owner_id, self.listings))
 
@@ -1611,7 +1736,7 @@ class CancelBrowser(discord.ui.View):
                                                     ephemeral=True)
             return
         ok, msg = db.market_cancel(self.selected_id, str(self.owner_id))
-        embed, view = render_cancel(str(self.owner_id), self.ore, self.quality)
+        embed, view = render_cancel(str(self.owner_id), self.ore, self.quality, tier=self.tier)
         await interaction.response.edit_message(embed=embed, view=view)
         await interaction.followup.send(("✅ " if ok else "❌ ") + msg, ephemeral=True)
 
@@ -1970,6 +2095,7 @@ async def help_cmd(interaction: discord.Interaction):
         "🚫 `/market_cancel` — take down a listing (dropdowns + button)\n"
         "🚫 `/market_cancel_all` — take down ALL listings\n"
         "🔄 `/trade @user` — trade ores (one-sided OK, both accept)\n"
+        "🎁 `/gift @user` — gift ores (they get mail)\n"
         "📊 `/stats [@user]` — 3 pages: stats, rarest spin, rarest buy\n"
         "🏆 `/achievements [@user]` — badges (paged + filter)\n"
         "🎲 `/odds` — rarities, odds, values\n"
@@ -2246,15 +2372,47 @@ class TradeRequestView(discord.ui.View):
                 pass
 
 
+class OfferTierSelect(discord.ui.Select):
+    def __init__(self, tid: int, side: str, current: str | None = None):
+        self.tid = tid
+        self.side = side
+        super().__init__(placeholder="Filter by tier…", options=[
+            discord.SelectOption(label="All tiers", value="all", default=(current is None))
+        ] + [discord.SelectOption(label=config.tier_name(r), value=r,
+                                   default=(r == current),
+                                   emoji=config.RARITIES[r].get("dot", ""))
+             for r in config.RARITIES])
+
+    async def callback(self, interaction: discord.Interaction):
+        t = trades.get(self.tid)
+        if t is None or interaction.user.id != t[f"{self.side}_id"]:
+            await interaction.response.send_message("Not yours!", ephemeral=True)
+            return
+        tier = None if self.values[0] == "all" else self.values[0]
+        view = OfferPickerView(self.tid, self.side, tier)
+        await interaction.response.edit_message(content="Pick the ore YOU offer (1 unit):",
+                                                view=view)
+
+
+class OfferPickerView(discord.ui.View):
+    def __init__(self, tid: int, side: str, tier: str | None = None):
+        super().__init__(timeout=180)
+        self.add_item(OfferTierSelect(tid, side, tier))
+        self.add_item(OfferOreSelect(tid, side, tier))
+
+
 class OfferOreSelect(discord.ui.Select):
     """Ephemeral: pick which of YOUR ores to offer."""
 
-    def __init__(self, tid: int, side: str):
+    def __init__(self, tid: int, side: str, tier: str | None = None):
         self.tid = tid
         self.side = side
+        self.tier = tier
         t = trades[tid]
         uid = str(t[f"{side}_id"])
         ores = db.get_ores_overview(uid)
+        if tier:
+            ores = [o for o in ores if tier in o["rarities"]]
         ores.sort(key=lambda o: (min(config.tier_index(r) for r in o["rarities"]), -o["count"]))
         options = [discord.SelectOption(
             label=f"{ore_tier_label(o['ore'], o['rarities'])} x{o['count']}"[:100], value=o["ore"])
@@ -2330,10 +2488,8 @@ class TradeMainView(discord.ui.View):
         if side != "a":
             await interaction.response.send_message("That's Player 1's button!", ephemeral=True)
             return
-        view = discord.ui.View(timeout=180)
-        view.add_item(OfferOreSelect(self.tid, "a"))
         await interaction.response.send_message(content="Pick the ore YOU offer (1 unit):",
-                                                view=view, ephemeral=True)
+                                                view=OfferPickerView(self.tid, "a"), ephemeral=True)
 
     @discord.ui.button(label="Set my offer (P2)", style=discord.ButtonStyle.primary, emoji="📦", row=0)
     async def set_b(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2344,10 +2500,8 @@ class TradeMainView(discord.ui.View):
         if side != "b":
             await interaction.response.send_message("That's Player 2's button!", ephemeral=True)
             return
-        view = discord.ui.View(timeout=180)
-        view.add_item(OfferOreSelect(self.tid, "b"))
         await interaction.response.send_message(content="Pick the ore YOU offer (1 unit):",
-                                                view=view, ephemeral=True)
+                                                view=OfferPickerView(self.tid, "b"), ephemeral=True)
 
     @discord.ui.button(label="Accept (P1)", style=discord.ButtonStyle.green, emoji="✅", row=1)
     async def ok_a(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2654,6 +2808,150 @@ async def admin_spins(interaction: discord.Interaction, per_day: str, max_at_onc
     db.set_setting("max_spin", str(mx))
     await interaction.response.send_message(
         f"🎰 Spins set: **{pd}/day**, up to **{mx}** per /spin.")
+
+
+# ---------- gifting (one-way, instant, notified via mail) ----------
+
+class GiftAmountModal(discord.ui.Modal, title="Gift — how many?"):
+    amount = discord.ui.TextInput(label="How many? (number or ALL)", placeholder="e.g. 1 or ALL",
+                                  max_length=8)
+
+    def __init__(self, giver_id: int, recip_id: int, rarity: str, quality: str, ore: str):
+        super().__init__()
+        self.giver_id = giver_id
+        self.recip_id = recip_id
+        self.rarity = rarity
+        self.quality = quality
+        self.ore = ore
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.user.id != self.giver_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        g, r = str(self.giver_id), str(self.recip_id)
+        stacks = db.get_ore_detail(g, self.ore)
+        stack = next((s for s in stacks if s["rarity"] == self.rarity
+                      and s["quality"] == self.quality), None)
+        if not stack:
+            await interaction.response.send_message("❌ That stack is gone.", ephemeral=True)
+            return
+        raw = str(self.amount.value).strip().lower()
+        n = stack["count"] if raw in ("all", "max") else None
+        if n is None:
+            try:
+                n = int(raw)
+            except ValueError:
+                await interaction.response.send_message("❌ Type a number or ALL.", ephemeral=True)
+                return
+        n = max(0, min(n, stack["count"]))
+        if n <= 0:
+            await interaction.response.send_message("❌ Nothing to gift.", ephemeral=True)
+            return
+        moved = 0
+        for origin, c in db.origin_counts(g, self.rarity, self.quality, self.ore).items():
+            k = min(c, n - moved)
+            if k <= 0:
+                continue
+            moved += db.remove_many_items(g, self.rarity, self.quality, self.ore, k, origin=origin)
+            db.add_many_items(r, [(self.rarity, self.quality, self.ore)] * k, origin=origin)
+            if moved >= n:
+                break
+        giver_name = await display_name(interaction, g)
+        db.add_mail(r, f"🎁 **{giver_name}** gifted you **{moved}x {self.ore} ({self.quality})**!")
+        recip_name = await display_name(interaction, r)
+        await interaction.response.send_message(
+            f"🎁 Gifted **{moved}x {self.ore} ({self.quality})** to **{recip_name}**!", ephemeral=True)
+
+
+class GiftQualitySelect(discord.ui.Select):
+    def __init__(self, giver_id: int, recip_id: int, ore: str, stacks: list[dict]):
+        self.giver_id = giver_id
+        self.recip_id = recip_id
+        self.ore = ore
+        options = [discord.SelectOption(
+            label=f"{s['ore']} ({s['quality']}) x{s['count']}"[:100],
+            description=f"{config.tier_name(s['rarity'])}"[:100],
+            value=f"{s['rarity']}|{s['quality']}") for s in stacks[:25]]
+        super().__init__(placeholder="Pick the stack…", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.giver_id:
+            await interaction.response.send_message("Not yours!", ephemeral=True)
+            return
+        rarity, quality = self.values[0].split("|")
+        await interaction.response.send_modal(
+            GiftAmountModal(self.giver_id, self.recip_id, rarity, quality, self.ore))
+
+
+class GiftOreSelect(discord.ui.Select):
+    def __init__(self, giver_id: int, recip_id: int, tier: str | None = None):
+        self.giver_id = giver_id
+        self.recip_id = recip_id
+        ores = db.get_ores_overview(str(giver_id))
+        if tier:
+            ores = [o for o in ores if tier in o["rarities"]]
+        ores.sort(key=lambda o: (min(config.tier_index(r) for r in o["rarities"]), -o["count"]))
+        options = [discord.SelectOption(
+            label=f"{ore_tier_label(o['ore'], o['rarities'])} x{o['count']}"[:100], value=o["ore"])
+            for o in ores[:25]]
+        super().__init__(placeholder="Pick the ore to gift…", options=options or [
+            discord.SelectOption(label="(empty inventory)", value="none")])
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.giver_id:
+            await interaction.response.send_message("Not yours!", ephemeral=True)
+            return
+        if self.values[0] == "none":
+            return
+        stacks = db.get_ore_detail(str(self.giver_id), self.values[0])
+        view = discord.ui.View(timeout=180)
+        view.add_item(GiftQualitySelect(self.giver_id, self.recip_id, self.values[0], stacks))
+        await interaction.response.edit_message(content="Pick the stack to gift:",
+                                                embed=None, view=view)
+
+
+class GiftTierSelect(discord.ui.Select):
+    def __init__(self, giver_id: int, recip_id: int, current: str | None = None):
+        self.giver_id = giver_id
+        self.recip_id = recip_id
+        super().__init__(placeholder="Filter by tier…", options=[
+            discord.SelectOption(label="All tiers", value="all", default=(current is None))
+        ] + [discord.SelectOption(label=config.tier_name(r), value=r,
+                                   default=(r == current),
+                                   emoji=config.RARITIES[r].get("dot", ""))
+             for r in config.RARITIES])
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.giver_id:
+            await interaction.response.send_message("Not yours!", ephemeral=True)
+            return
+        tier = None if self.values[0] == "all" else self.values[0]
+        view = GiftPickerView(self.giver_id, self.recip_id, tier)
+        await interaction.response.edit_message(content="Pick the ore to gift:", view=view)
+
+
+class GiftPickerView(discord.ui.View):
+    def __init__(self, giver_id: int, recip_id: int, tier: str | None = None):
+        super().__init__(timeout=180)
+        self.add_item(GiftTierSelect(giver_id, recip_id, tier))
+        self.add_item(GiftOreSelect(giver_id, recip_id, tier))
+
+
+@bot.tree.command(name="gift", description="Gift ores to another player (they get mail).")
+@app_commands.describe(user="Who gets the gift")
+async def gift(interaction: discord.Interaction, user: discord.User):
+    if user.id == interaction.user.id:
+        await interaction.response.send_message("❌ You can't gift yourself!", ephemeral=True)
+        return
+    if user.bot:
+        await interaction.response.send_message("❌ You can't gift a bot!", ephemeral=True)
+        return
+    if not db.get_ores_overview(str(interaction.user.id)):
+        await interaction.response.send_message("🎒 Your inventory is empty!", ephemeral=True)
+        return
+    await interaction.response.send_message(
+        content=f"🎁 Pick what to gift **{(await display_name(interaction, str(user.id)))}**:",
+        view=GiftPickerView(interaction.user.id, user.id), ephemeral=True)
 
 
 if __name__ == "__main__":

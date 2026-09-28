@@ -495,7 +495,7 @@ def market_qualities(ore: str) -> list[str]:
 
 
 def market_browse(ore: str | None = None, quality: str | None = None,
-                  sort: str = "new", limit: int = 10) -> list[dict]:
+                  sort: str = "new", limit: int = 10, tier: str | None = None) -> list[dict]:
     """sort: new | cheapest | expensive | average (closest to mean price)."""
     clauses, params = [], []
     if ore:
@@ -504,6 +504,9 @@ def market_browse(ore: str | None = None, quality: str | None = None,
     if quality:
         clauses.append("quality = ?")
         params.append(quality)
+    if tier:
+        clauses.append("rarity = ?")
+        params.append(tier)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     with _lock, get_conn() as conn:
         if sort == "average":
@@ -588,7 +591,8 @@ def market_seller_qualities(seller_id: str, ore: str) -> list[str]:
 
 
 def market_by_seller(seller_id: str, ore: str | None = None,
-                     quality: str | None = None, limit: int = 10) -> list[dict]:
+                     quality: str | None = None, limit: int = 10,
+                     tier: str | None = None) -> list[dict]:
     clauses, params = ["seller_id = ?"], [seller_id]
     if ore:
         clauses.append("ore = ?")
@@ -596,6 +600,9 @@ def market_by_seller(seller_id: str, ore: str | None = None,
     if quality:
         clauses.append("quality = ?")
         params.append(quality)
+    if tier:
+        clauses.append("rarity = ?")
+        params.append(tier)
     with _lock, get_conn() as conn:
         rows = conn.execute(
             f"SELECT * FROM market WHERE {' AND '.join(clauses)} ORDER BY id DESC LIMIT ?",
