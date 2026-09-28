@@ -114,7 +114,7 @@ _MAIL_DDL = """CREATE TABLE mail (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     is_read INTEGER NOT NULL DEFAULT 0
 );"""
-_KV_DDL = """CREATE TABLE kv (
+_KV_DDL = """CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL DEFAULT ''
 );"""
@@ -128,6 +128,8 @@ def _ensure_guild_table(conn, table: str, create_ddl: str):
         return
     if "guild_id" in cols:
         return
+    # idempotent: a previous interrupted migration may have left NAME_legacy behind
+    conn.execute(f"DROP TABLE IF EXISTS {table}_legacy")
     conn.execute(f"ALTER TABLE {table} RENAME TO {table}_legacy")
     conn.executescript(create_ddl)
     keep = [c for c in cols if c != "id" or table in ("inventory", "vault", "market", "trades", "mail")]
@@ -142,9 +144,10 @@ def init_db():
         for _table, _ddl in (
             ("users", _USERS_DDL), ("inventory", _INVENTORY_DDL), ("vault", _VAULT_DDL),
             ("market", _MARKET_DDL), ("achievements", _ACH_DDL), ("trades", _TRADES_DDL),
-            ("mail", _MAIL_DDL), ("kv", _KV_DDL),
+            ("mail", _MAIL_DDL),
         ):
             _ensure_guild_table(conn, _table, _ddl)
+        conn.executescript(_KV_DDL)  # kv stays global (kill-switch must be global)
         conn.executescript("""
         CREATE INDEX IF NOT EXISTS idx_inv_user ON inventory(guild_id, user_id);
         CREATE INDEX IF NOT EXISTS idx_inv_stack ON inventory(guild_id, user_id, rarity, quality, ore);
