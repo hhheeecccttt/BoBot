@@ -596,13 +596,15 @@ class StackInspectView(discord.ui.View):
 
 class BrowserInspectSelect(discord.ui.Select):
     def __init__(self, stacks: list[dict]):
-        self.lookup = {(s["rarity"], s["quality"]): s for s in stacks}
+        # value includes ore: main pages list many ores, and two ores can
+        # share a rarity+quality (duplicate values = Discord 400 error)
+        self.lookup = {(s["rarity"], s["quality"], s["ore"]): s for s in stacks}
         options = []
         for s in stacks[:25]:
             label = f"{s['ore']} ({s['quality']}) x{s['count']}"[:100]
             desc = f"{config.tier_name(s['rarity'])} • quicksell ${config.quicksell_value(s['rarity']):,} each"[:100]
             options.append(discord.SelectOption(label=label, description=desc,
-                                                value=f"{s['rarity']}|{s['quality']}"))
+                                                value=f"{s['rarity']}|{s['quality']}|{s['ore']}"))
         super().__init__(placeholder="Inspect a stack…", options=options or [
             discord.SelectOption(label="(empty)", value="none")])
 
@@ -614,8 +616,8 @@ class BrowserInspectSelect(discord.ui.Select):
             return
         if self.values[0] == "none":
             return
-        rarity, quality = self.values[0].split("|")
-        s = self.lookup[(rarity, quality)]
+        rarity, quality, ore = self.values[0].split("|", 2)
+        s = self.lookup[(rarity, quality, ore)]
         view.selected = (rarity, quality)
         if view.source == "vault":
             text = vault_inspect_text(str(view.target_id), rarity, quality, s["ore"], s["count"])
