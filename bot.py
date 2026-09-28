@@ -703,9 +703,9 @@ async def restore_trades():
 
 # ---------- commands ----------
 
-@bot.tree.command(name="spin", description=f"Spin! Optional amount (up to 1000).")
+@bot.tree.command(name="spin", description=f"Spin! Optional amount (up to 100000).")
 @app_commands.describe(amount="How many spins (default 1)")
-async def spin(interaction: discord.Interaction, amount: app_commands.Range[int, 1, 1000] = 1):
+async def spin(interaction: discord.Interaction, amount: app_commands.Range[int, 1, 100000] = 1):
     await interaction.response.defer()
     uid = str(interaction.user.id)
     db.init_db()
@@ -717,9 +717,9 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
     except ValueError:
         spins_per_day = 3
     try:
-        max_spin = max(1, min(1000, int(db.get_setting("max_spin") or 1000)))
+        max_spin = max(1, min(100000, int(db.get_setting("max_spin") or 100000)))
     except ValueError:
-        max_spin = 1000
+        max_spin = 100000
     amount = min(amount, max_spin)
 
     if UNLIMITED_SPINS:
@@ -2560,7 +2560,7 @@ async def admin_enable(interaction: discord.Interaction):
 
 @bot.tree.command(name="admin_spins", description="[ADMIN] Set spins per day and max per /spin.")
 @app_commands.describe(per_day="Spins per day (number, or -1 for unlimited)",
-                       max_at_once="Max per /spin call (number or 'infinite' = 1000)")
+                       max_at_once="Max per /spin call (number or 'infinite' = 100000)")
 async def admin_spins(interaction: discord.Interaction, per_day: str, max_at_once: str):
     if not is_admin(interaction):
         await interaction.response.send_message("❌ Admins only!", ephemeral=True)
@@ -2577,13 +2577,13 @@ async def admin_spins(interaction: discord.Interaction, per_day: str, max_at_onc
         return max(1, min(v, cap))
 
     pd = parse_spins(per_day, 1000000)
-    mx = parse_spins(max_at_once, 1000)
+    mx = parse_spins(max_at_once, 100000)
     if pd is None or mx is None:
         await interaction.response.send_message(
             "❌ Type a number, `-1` for unlimited, or `infinite`.", ephemeral=True)
         return
     if mx == "inf":
-        mx = 1000  # hard cap per call
+        mx = 100000  # hard cap per call
     db.set_setting("spins_per_day", str(pd))
     db.set_setting("max_spin", str(mx))
     await interaction.response.send_message(

@@ -626,7 +626,7 @@ def max_trade_id() -> int:
 KV_DEFAULTS = {
     "commands_enabled": "1",
     "spins_per_day": "3",
-    "max_spin": "1000",
+    "max_spin": "100000",
 }
 
 
