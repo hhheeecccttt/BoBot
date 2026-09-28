@@ -3005,7 +3005,52 @@ async def admin_enable(interaction: discord.Interaction):
     await interaction.response.send_message("🔓 Commands re-enabled!")
 
 
-@bot.tree.command(name="admin_spins", description="[ADMIN] Set spins per day and max per /spin.")
+@bot.tree.command(name="admin_nuke", description="[ADMIN] FACTORY RESET: wipe everything.")
+async def admin_nuke(interaction: discord.Interaction):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ Admins only!", ephemeral=True)
+        return
+    view = NukeConfirmView(interaction.user.id)
+    await interaction.response.send_message(
+        "☢️ **FACTORY RESET?** This wipes **everything**: all balances, inventories, vaults, "
+        "market listings, trades, mail, achievements and settings. **Cannot be undone.**",
+        view=view, ephemeral=True)
+
+
+class NukeConfirmView(discord.ui.View):
+    def __init__(self, owner_id: int):
+        super().__init__(timeout=60)
+        self.owner_id = owner_id
+
+    @discord.ui.button(label="YES, WIPE EVERYTHING", style=discord.ButtonStyle.danger, emoji="☢️")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Not yours!", ephemeral=True)
+            return
+        import bot as _me  # noqa - module ref to clear in-memory trades
+        with db._lock, db.get_conn() as conn:
+            for table in ("users", "inventory", "market", "achievements", "trades",
+                          "kv", "mail", "vault"):
+                try:
+                    conn.execute(f"DELETE FROM {table}")
+                except Exception:
+                    pass
+            conn.commit()
+        trades.clear()
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            content="☢️ Factory reset complete. Fresh start for everyone.", embed=None, view=self)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="✖")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Not yours!", ephemeral=True)
+            return
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content="Phew. Cancelled — nothing was touched.",
+                                                embed=None, view=self)
 @app_commands.describe(per_day="Spins per day (number, or -1 for unlimited)",
                        max_at_once="Max per /spin call (number or 'infinite' = 100000)")
 async def admin_spins(interaction: discord.Interaction, per_day: str, max_at_once: str):
