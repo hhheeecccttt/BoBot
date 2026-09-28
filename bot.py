@@ -1068,8 +1068,12 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
     newly: list[str] = []
     first = True
     for r, q in sorted(set(pulls)):
-        newly += check_achievements(uid, u, r, q, collectors=first)
+        try:
+            newly += check_achievements(uid, u, r, q, collectors=first)
+        except Exception as e:
+            print(f"SPINDBG check failed for {uid} ({r},{q}): {type(e).__name__}: {e}")
         first = False
+    print(f"SPINDBG spins={u['total_spins']} pairs={sorted(set(pulls))} newly={len(newly)}")
     if newly:
         # de-dupe (multiple checks can grant different achievements; same one can't double-grant)
         seen, unique = set(), []
