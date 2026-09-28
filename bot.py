@@ -3142,11 +3142,14 @@ class ScopeGiftModal(discord.ui.Modal, title="Gift — how many?"):
         what = ", ".join(desc_parts[:3]) + ("…" if len(desc_parts) > 3 else "")
         db.add_mail(r, f"🎁 **{giver_name}** gifted you **{moved}x** {what}!")
         sync_collectors(g)  # giver may have broken a set
-        # recipient obtain checks (Jackpot can fire here)
-        first = targets[0] if targets else None
+        # recipient obtain checks per distinct gifted pair (Jackpot needs the combo)
+        gifted_pairs = sorted({(t["rarity"], t["quality"]) for t in targets})
         newly2 = []
-        if first and moved > 0:
-            newly2 = check_achievements(r, db.get_user(r), first["rarity"], first["quality"])
+        if moved > 0:
+            first2 = True
+            for r, q in gifted_pairs:
+                newly2 += check_achievements(r, db.get_user(r), r, q, collectors=first2)
+                first2 = False
         recip_name = await display_name(interaction, r)
         await interaction.followup.send(
             f"🎁 Gifted **{moved}x** {what} to **{recip_name}**!", ephemeral=True)

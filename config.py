@@ -58,7 +58,7 @@ ACHIEVEMENTS = {
     "perfect_pull": ("Flawless", "Obtain a Perfect condition ore"),
     "perfect_10":   ("Majestic", "Obtain 10 Perfect condition ores"),
     "perfect_30":   ("Divine", "Obtain 30 Perfect condition ores"),
-    "jackpot":      ("Jackpot", "Obtain a Perfect DIH Tier ore"),
+    "jackpot":      ("Jackpot", "Obtain a Perfect condition DIH Tier ore"),
     "collector_low":   ("Rookie Collector", "Collect every Low Tier ore"),
     "collector_mid":   ("Amateur Collector", "Collect every Mid Tier ore"),
     "collector_high":  ("Experienced Collector", "Collect every High Tier ore"),
