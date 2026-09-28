@@ -15,110 +15,147 @@ def get_conn():
     return conn
 
 
+# Every table below is scoped by guild_id: each Discord server gets a fully
+# independent economy (its own balances, inventories, market, ...).
+# Pre-scope databases are migrated with old rows kept under guild '0' (legacy).
+_USERS_DDL = """CREATE TABLE users (
+    guild_id TEXT NOT NULL DEFAULT '0',
+    user_id TEXT NOT NULL,
+    balance INTEGER NOT NULL DEFAULT 0,
+    total_spins INTEGER NOT NULL DEFAULT 0,
+    spins_used_today INTEGER NOT NULL DEFAULT 0,
+    last_reset TEXT NOT NULL DEFAULT '',
+    last_spin_date TEXT NOT NULL DEFAULT '',
+    streak INTEGER NOT NULL DEFAULT 0,
+    longest_streak INTEGER NOT NULL DEFAULT 0,
+    total_earned INTEGER NOT NULL DEFAULT 0,
+    low_pulls INTEGER NOT NULL DEFAULT 0,
+    mid_pulls INTEGER NOT NULL DEFAULT 0,
+    high_pulls INTEGER NOT NULL DEFAULT 0,
+    elite_pulls INTEGER NOT NULL DEFAULT 0,
+    dih_pulls INTEGER NOT NULL DEFAULT 0,
+    perfect_pulls INTEGER NOT NULL DEFAULT 0,
+    buy_count INTEGER NOT NULL DEFAULT 0,
+    sell_count INTEGER NOT NULL DEFAULT 0,
+    inv_public INTEGER NOT NULL DEFAULT 0,
+    ach_public INTEGER NOT NULL DEFAULT 0,
+    stats_public INTEGER NOT NULL DEFAULT 0,
+    bank_public INTEGER NOT NULL DEFAULT 0,
+    vault_public INTEGER NOT NULL DEFAULT 0,
+    market_public INTEGER NOT NULL DEFAULT 0,
+    mail_public INTEGER NOT NULL DEFAULT 0,
+    balance_public INTEGER NOT NULL DEFAULT 0,
+    timezone TEXT NOT NULL DEFAULT 'UTC',
+    bank_balance INTEGER NOT NULL DEFAULT 0,
+    rarest_spin TEXT NOT NULL DEFAULT '',
+    rarest_buy TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (guild_id, user_id)
+);"""
+_INVENTORY_DDL = """CREATE TABLE inventory (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL DEFAULT '0',
+    user_id TEXT NOT NULL,
+    rarity TEXT NOT NULL,
+    quality TEXT NOT NULL,
+    ore TEXT NOT NULL,
+    origin TEXT NOT NULL DEFAULT 'spin',
+    origin_detail TEXT NOT NULL DEFAULT '',
+    acquired_at TEXT NOT NULL DEFAULT (datetime('now'))
+);"""
+_VAULT_DDL = """CREATE TABLE vault (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL DEFAULT '0',
+    user_id TEXT NOT NULL,
+    rarity TEXT NOT NULL,
+    quality TEXT NOT NULL,
+    ore TEXT NOT NULL,
+    origin TEXT NOT NULL DEFAULT 'spin',
+    origin_detail TEXT NOT NULL DEFAULT '',
+    stored_at TEXT NOT NULL DEFAULT (datetime('now'))
+);"""
+_MARKET_DDL = """CREATE TABLE market (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL DEFAULT '0',
+    seller_id TEXT NOT NULL,
+    rarity TEXT NOT NULL,
+    quality TEXT NOT NULL,
+    ore TEXT NOT NULL,
+    price INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);"""
+_ACH_DDL = """CREATE TABLE achievements (
+    guild_id TEXT NOT NULL DEFAULT '0',
+    user_id TEXT NOT NULL,
+    ach_id TEXT NOT NULL,
+    unlocked_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (guild_id, user_id, ach_id)
+);"""
+_TRADES_DDL = """CREATE TABLE trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL DEFAULT '0',
+    a_id TEXT NOT NULL,
+    b_id TEXT NOT NULL,
+    a_name TEXT NOT NULL DEFAULT '',
+    b_name TEXT NOT NULL DEFAULT '',
+    a_pick TEXT,
+    b_pick TEXT,
+    a_ok INTEGER NOT NULL DEFAULT 0,
+    b_ok INTEGER NOT NULL DEFAULT 0,
+    stage TEXT NOT NULL DEFAULT 'request',
+    channel_id TEXT NOT NULL DEFAULT '',
+    message_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);"""
+_MAIL_DDL = """CREATE TABLE mail (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL DEFAULT '0',
+    user_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    is_read INTEGER NOT NULL DEFAULT 0
+);"""
+_KV_DDL = """CREATE TABLE kv (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
+);"""
+
+
+def _ensure_guild_table(conn, table: str, create_ddl: str):
+    """Create fresh, or rebuild pre-scope tables preserving rows under guild '0'."""
+    cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+    if not cols:
+        conn.executescript(create_ddl)
+        return
+    if "guild_id" in cols:
+        return
+    conn.execute(f"ALTER TABLE {table} RENAME TO {table}_legacy")
+    conn.executescript(create_ddl)
+    keep = [c for c in cols if c != "id" or table in ("inventory", "vault", "market", "trades", "mail")]
+    # 'id' AUTOINCREMENT cols are preserved as-is; everything else copied + guild '0'
+    collist = ", ".join(keep)
+    conn.execute(f"INSERT INTO {table} (guild_id, {collist}) SELECT '0', {collist} FROM {table}_legacy")
+    conn.execute(f"DROP TABLE {table}_legacy")
+
+
 def init_db():
     with _lock, get_conn() as conn:
+        for _table, _ddl in (
+            ("users", _USERS_DDL), ("inventory", _INVENTORY_DDL), ("vault", _VAULT_DDL),
+            ("market", _MARKET_DDL), ("achievements", _ACH_DDL), ("trades", _TRADES_DDL),
+            ("mail", _MAIL_DDL), ("kv", _KV_DDL),
+        ):
+            _ensure_guild_table(conn, _table, _ddl)
         conn.executescript("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id TEXT PRIMARY KEY,
-            balance INTEGER NOT NULL DEFAULT 0,
-            total_spins INTEGER NOT NULL DEFAULT 0,
-            spins_used_today INTEGER NOT NULL DEFAULT 0,
-            last_reset TEXT NOT NULL DEFAULT '',
-            last_spin_date TEXT NOT NULL DEFAULT '',
-            streak INTEGER NOT NULL DEFAULT 0,
-            longest_streak INTEGER NOT NULL DEFAULT 0,
-            total_earned INTEGER NOT NULL DEFAULT 0,
-            low_pulls INTEGER NOT NULL DEFAULT 0,
-            mid_pulls INTEGER NOT NULL DEFAULT 0,
-            high_pulls INTEGER NOT NULL DEFAULT 0,
-            elite_pulls INTEGER NOT NULL DEFAULT 0,
-            dih_pulls INTEGER NOT NULL DEFAULT 0,
-            perfect_pulls INTEGER NOT NULL DEFAULT 0,
-            buy_count INTEGER NOT NULL DEFAULT 0,
-            sell_count INTEGER NOT NULL DEFAULT 0,
-            inv_public INTEGER NOT NULL DEFAULT 0,
-            ach_public INTEGER NOT NULL DEFAULT 0,
-            stats_public INTEGER NOT NULL DEFAULT 0,
-            bank_public INTEGER NOT NULL DEFAULT 0,
-            vault_public INTEGER NOT NULL DEFAULT 0,
-            market_public INTEGER NOT NULL DEFAULT 0,
-            mail_public INTEGER NOT NULL DEFAULT 0,
-            balance_public INTEGER NOT NULL DEFAULT 0,
-            timezone TEXT NOT NULL DEFAULT 'UTC',
-            bank_balance INTEGER NOT NULL DEFAULT 0,
-            rarest_spin TEXT NOT NULL DEFAULT '',
-            rarest_buy TEXT NOT NULL DEFAULT ''
-        );
-        CREATE TABLE IF NOT EXISTS inventory (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            rarity TEXT NOT NULL,
-            quality TEXT NOT NULL,
-            ore TEXT NOT NULL,
-            origin TEXT NOT NULL DEFAULT 'spin',
-            origin_detail TEXT NOT NULL DEFAULT '',
-            acquired_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        CREATE INDEX IF NOT EXISTS idx_inv_user ON inventory(user_id);
-        CREATE INDEX IF NOT EXISTS idx_inv_stack ON inventory(user_id, rarity, quality, ore);
-        CREATE INDEX IF NOT EXISTS idx_inv_origin ON inventory(user_id, origin);
-        CREATE INDEX IF NOT EXISTS idx_inv_ore ON inventory(user_id, ore);
-        CREATE TABLE IF NOT EXISTS market (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            seller_id TEXT NOT NULL,
-            rarity TEXT NOT NULL,
-            quality TEXT NOT NULL,
-            ore TEXT NOT NULL,
-            price INTEGER NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        CREATE TABLE IF NOT EXISTS achievements (
-            user_id TEXT NOT NULL,
-            ach_id TEXT NOT NULL,
-            unlocked_at TEXT NOT NULL DEFAULT (datetime('now')),
-            PRIMARY KEY (user_id, ach_id)
-        );
-        CREATE TABLE IF NOT EXISTS trades (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            a_id TEXT NOT NULL,
-            b_id TEXT NOT NULL,
-            a_name TEXT NOT NULL DEFAULT '',
-            b_name TEXT NOT NULL DEFAULT '',
-            a_pick TEXT,
-            b_pick TEXT,
-            a_ok INTEGER NOT NULL DEFAULT 0,
-            b_ok INTEGER NOT NULL DEFAULT 0,
-            stage TEXT NOT NULL DEFAULT 'request',
-            channel_id TEXT NOT NULL DEFAULT '',
-            message_id TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        CREATE TABLE IF NOT EXISTS kv (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL DEFAULT ''
-        );
-        CREATE TABLE IF NOT EXISTS mail (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            text TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            is_read INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE INDEX IF NOT EXISTS idx_mail_user ON mail(user_id);
-        CREATE TABLE IF NOT EXISTS vault (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            rarity TEXT NOT NULL,
-            quality TEXT NOT NULL,
-            ore TEXT NOT NULL,
-            origin TEXT NOT NULL DEFAULT 'spin',
-            origin_detail TEXT NOT NULL DEFAULT '',
-            stored_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        CREATE INDEX IF NOT EXISTS idx_vault_user ON vault(user_id);
-        CREATE INDEX IF NOT EXISTS idx_vault_stack ON vault(user_id, rarity, quality, ore);
-        CREATE INDEX IF NOT EXISTS idx_market_seller ON market(seller_id);
-        CREATE INDEX IF NOT EXISTS idx_ach_user ON achievements(user_id);
+        CREATE INDEX IF NOT EXISTS idx_inv_user ON inventory(guild_id, user_id);
+        CREATE INDEX IF NOT EXISTS idx_inv_stack ON inventory(guild_id, user_id, rarity, quality, ore);
+        CREATE INDEX IF NOT EXISTS idx_inv_origin ON inventory(guild_id, user_id, origin);
+        CREATE INDEX IF NOT EXISTS idx_inv_ore ON inventory(guild_id, user_id, ore);
+        CREATE INDEX IF NOT EXISTS idx_vault_user ON vault(guild_id, user_id);
+        CREATE INDEX IF NOT EXISTS idx_vault_stack ON vault(guild_id, user_id, rarity, quality, ore);
+        CREATE INDEX IF NOT EXISTS idx_market_seller ON market(guild_id, seller_id);
+        CREATE INDEX IF NOT EXISTS idx_market_ore ON market(guild_id, ore);
+        CREATE INDEX IF NOT EXISTS idx_ach_user ON achievements(guild_id, user_id);
+        CREATE INDEX IF NOT EXISTS idx_mail_user ON mail(guild_id, user_id);
         """)
         # --- migrations for DBs created before these columns existed ---
         for _table, _col, _ddl in (
@@ -178,7 +215,7 @@ def update_user(user_id: str, **fields):
 
 
 def reset_spins_if_new_day(user_id: str, today: str) -> dict:
-    """Reset spins_used_today if it's a new UTC day. Returns fresh user dict."""
+    """Reset spins_used_today if it's a new day (in the user's timezone). Returns fresh user."""
     u = get_user(user_id)
     if u["last_reset"] != today:
         update_user(user_id, spins_used_today=0, last_reset=today)
@@ -467,59 +504,68 @@ def inventory_value(user_id: str, ore: str | None = None, quality: str | None = 
 
 # ---------- market ----------
 
-def market_list(seller_id: str, rarity: str, quality: str, ore: str, price: int) -> int | None:
+def market_list(guild_id: str, seller_id: str, rarity: str, quality: str, ore: str,
+                price: int) -> int | None:
     """Removes one item from seller inventory and creates a listing. Returns listing id or None."""
     item_id = remove_one_item(seller_id, rarity, quality, ore)
     if item_id is None:
         return None
     with _lock, get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO market (seller_id, rarity, quality, ore, price) VALUES (?,?,?,?,?)",
-            (seller_id, rarity, quality, ore, price),
+            "INSERT INTO market (guild_id, seller_id, rarity, quality, ore, price) VALUES (?,?,?,?,?,?)",
+            (guild_id, seller_id, rarity, quality, ore, price),
         )
         conn.commit()
         return cur.lastrowid
 
 
-def market_view(limit: int = 10) -> list[dict]:
+def market_view(guild_id: str, limit: int = 10) -> list[dict]:
     with _lock, get_conn() as conn:
-        rows = conn.execute("SELECT * FROM market ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        rows = conn.execute("SELECT * FROM market WHERE guild_id=? ORDER BY id DESC LIMIT ?",
+                            (guild_id, limit)).fetchall()
         return [dict(r) for r in rows]
 
 
-def market_get(listing_id: int) -> dict | None:
+def market_get(listing_id: int, guild_id: str | None = None) -> dict | None:
     with _lock, get_conn() as conn:
-        row = conn.execute("SELECT * FROM market WHERE id=?", (listing_id,)).fetchone()
+        if guild_id is None:
+            row = conn.execute("SELECT * FROM market WHERE id=?", (listing_id,)).fetchone()
+        else:
+            row = conn.execute("SELECT * FROM market WHERE id=? AND guild_id=?",
+                               (listing_id, guild_id)).fetchone()
         return dict(row) if row else None
 
 
-def market_ores() -> list[str]:
+def market_ores(guild_id: str) -> list[str]:
     """All ore names currently listed (for the filter dropdown)."""
     with _lock, get_conn() as conn:
-        rows = conn.execute("SELECT DISTINCT ore FROM market ORDER BY ore").fetchall()
+        rows = conn.execute("SELECT DISTINCT ore FROM market WHERE guild_id=? ORDER BY ore",
+                            (guild_id,)).fetchall()
         return [r["ore"] for r in rows]
 
 
-def market_ores_with_rarity() -> list[dict]:
+def market_ores_with_rarity(guild_id: str) -> list[dict]:
     """One row per ore with its rarities: [{ore, rarities: [..]}, ...]"""
     with _lock, get_conn() as conn:
-        rows = conn.execute("SELECT DISTINCT ore, rarity FROM market ORDER BY ore, rarity").fetchall()
+        rows = conn.execute("SELECT DISTINCT ore, rarity FROM market WHERE guild_id=? ORDER BY ore, rarity",
+                            (guild_id,)).fetchall()
         grouped: dict[str, list[str]] = {}
         for r in rows:
             grouped.setdefault(r["ore"], []).append(r["rarity"])
         return [{"ore": ore, "rarities": rars} for ore, rars in grouped.items()]
 
 
-def market_qualities(ore: str) -> list[str]:
+def market_qualities(guild_id: str, ore: str) -> list[str]:
     with _lock, get_conn() as conn:
-        rows = conn.execute("SELECT DISTINCT quality FROM market WHERE ore=? ORDER BY quality", (ore,)).fetchall()
+        rows = conn.execute("SELECT DISTINCT quality FROM market WHERE guild_id=? AND ore=? ORDER BY quality",
+                            (guild_id, ore)).fetchall()
         return [r["quality"] for r in rows]
 
 
-def market_browse(ore: str | None = None, quality: str | None = None,
+def market_browse(guild_id: str, ore: str | None = None, quality: str | None = None,
                   sort: str = "new", limit: int = 10, tier: str | None = None) -> list[dict]:
     """sort: new | cheapest | expensive | average (closest to mean price)."""
-    clauses, params = [], []
+    clauses, params = ["guild_id = ?"], [guild_id]
     if ore:
         clauses.append("ore = ?")
         params.append(ore)
@@ -544,10 +590,14 @@ def market_browse(ore: str | None = None, quality: str | None = None,
         return [dict(r) for r in rows]
 
 
-def market_buy(listing_id: int, buyer_id: str):
+def market_buy(listing_id: int, buyer_id: str, guild_id: str | None = None):
     """Returns (ok: bool, message: str)."""
     with _lock, get_conn() as conn:
-        listing = conn.execute("SELECT * FROM market WHERE id=?", (listing_id,)).fetchone()
+        if guild_id is None:
+            listing = conn.execute("SELECT * FROM market WHERE id=?", (listing_id,)).fetchone()
+        else:
+            listing = conn.execute("SELECT * FROM market WHERE id=? AND guild_id=?",
+                                   (listing_id, guild_id)).fetchone()
         if listing is None:
             return False, "That listing doesn't exist (already sold?)."
         listing = dict(listing)
@@ -570,9 +620,14 @@ def market_buy(listing_id: int, buyer_id: str):
         return True, f"You bought **{listing['quality']} {listing['ore']}** ({listing['rarity']}) for **${listing['price']:,}**!"
 
 
-def market_cancel(listing_id: int, user_id: str):
+def market_cancel(listing_id: int, user_id: str, guild_id: str | None = None):
     with _lock, get_conn() as conn:
-        listing = conn.execute("SELECT * FROM market WHERE id=? AND seller_id=?", (listing_id, user_id)).fetchone()
+        if guild_id is None:
+            listing = conn.execute("SELECT * FROM market WHERE id=? AND seller_id=?",
+                                   (listing_id, user_id)).fetchone()
+        else:
+            listing = conn.execute("SELECT * FROM market WHERE id=? AND seller_id=? AND guild_id=?",
+                                   (listing_id, user_id, guild_id)).fetchone()
         if listing is None:
             return False, "Listing not found or not yours."
         listing = dict(listing)
@@ -634,12 +689,12 @@ def market_by_seller(seller_id: str, ore: str | None = None,
 
 # ---------- trades (persisted so restarts don't kill active trades) ----------
 
-def create_trade(a_id: str, b_id: str, a_name: str, b_name: str,
+def create_trade(guild_id: str, a_id: str, b_id: str, a_name: str, b_name: str,
                  channel_id: str = "", message_id: str = "") -> int:
     with _lock, get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO trades (a_id, b_id, a_name, b_name, channel_id, message_id) VALUES (?,?,?,?,?,?)",
-            (a_id, b_id, a_name, b_name, channel_id, message_id),
+            "INSERT INTO trades (guild_id, a_id, b_id, a_name, b_name, channel_id, message_id) VALUES (?,?,?,?,?,?,?)",
+            (guild_id, a_id, b_id, a_name, b_name, channel_id, message_id),
         )
         conn.commit()
         return cur.lastrowid
@@ -687,18 +742,23 @@ KV_DEFAULTS = {
 }
 
 
-def get_setting(key: str) -> str:
+def get_setting(key: str, guild_id: str | None = None) -> str:
     with _lock, get_conn() as conn:
+        if guild_id is not None:
+            row = conn.execute("SELECT value FROM kv WHERE key=?", (f"{guild_id}:{key}",)).fetchone()
+            if row is not None:
+                return row["value"]
         row = conn.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
         if row is None:
             return KV_DEFAULTS.get(key, "")
         return row["value"]
 
 
-def set_setting(key: str, value: str):
+def set_setting(key: str, value: str, guild_id: str | None = None):
     with _lock, get_conn() as conn:
         conn.execute("INSERT INTO kv (key, value) VALUES (?,?) "
-                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                     (f"{guild_id}:{key}" if guild_id is not None else key, value))
         conn.commit()
 
 
@@ -891,20 +951,23 @@ def get_achievements(user_id: str) -> list[str]:
 
 # ---------- leaderboard ----------
 
-def top_balances(limit: int = 10) -> list[dict]:
+def top_balances(guild_id: str, limit: int = 10) -> list[dict]:
     with _lock, get_conn() as conn:
         rows = conn.execute(
-            "SELECT user_id, balance, total_spins FROM users ORDER BY balance DESC, total_spins DESC LIMIT ?",
-            (limit,),
+            "SELECT user_id, balance, total_spins FROM users WHERE user_id LIKE ? "
+            "ORDER BY balance DESC, total_spins DESC LIMIT ?",
+            (f"{guild_id}:%", limit,),
         ).fetchall()
         return [dict(r) for r in rows]
 
 
-def get_rank(user_id: str) -> int:
-    """1-based rank by balance. Returns -1 if user not found."""
+def get_rank(guild_id: str, user_id: str) -> int:
+    """1-based rank by balance within the server. Returns -1 if user not found."""
     with _lock, get_conn() as conn:
         row = conn.execute("SELECT balance FROM users WHERE user_id=?", (user_id,)).fetchone()
         if row is None:
             return -1
-        higher = conn.execute("SELECT COUNT(*) c FROM users WHERE balance > ?", (row["balance"],)).fetchone()
+        higher = conn.execute(
+            "SELECT COUNT(*) c FROM users WHERE user_id LIKE ? AND balance > ?",
+            (f"{guild_id}:%", row["balance"],)).fetchone()
         return higher["c"] + 1

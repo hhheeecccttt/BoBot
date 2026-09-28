@@ -2,6 +2,8 @@
 
 Discord bot: 3 spins/day, rarity rolls, quality rolls, quicksell, player market, inventory dropdown, streaks, stats, achievements.
 
+**Server-independent:** every Discord server gets its own separate economy — balances, inventories, vaults, market, achievements, streaks, and even spins/day are all per-server. Same bot, different worlds. (Data from before this update lives under a legacy scope; each server starts fresh.)
+
 ## Quick answers to your questions
 
 - **Player market — impossible?** No, totally doable. Included: `/market_post`, `/market_view`, `/market_buy`, `/market_cancel`.
