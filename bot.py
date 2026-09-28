@@ -210,6 +210,27 @@ def format_achievements(newly: list[str]) -> str:
     return f"🏆 Achievements unlocked ({len(newly)}): " + ", ".join(f"**{n}**" for n in names)
 
 
+async def achievement_reply(interaction: discord.Interaction, mention: str,
+                            newly: list[str], ref_message=None):
+    """Announce unlocks as a REPLY (falls back to followup). De-duped, always one message."""
+    if not newly:
+        return
+    seen, unique = set(), []
+    for line in newly:
+        if line not in seen:
+            seen.add(line)
+            unique.append(line)
+    text = f"{mention} " + format_achievements(unique)
+    try:
+        ref = ref_message or await interaction.original_response()
+        await interaction.channel.send(content=text, reference=ref)
+    except Exception:
+        try:
+            await interaction.followup.send(text)
+        except Exception:
+            pass
+
+
 # ---------- spin view (quicksell button) ----------
 
 class SpinView(discord.ui.View):
@@ -363,8 +384,7 @@ class ScopeQuicksellModal(discord.ui.Modal, title="Quicksell"):
             f"💸 Sold **{sold}** ore(s){' ' + scope if scope else ''} for **${earned:,}**!",
             ephemeral=True)
         if newly:
-            await interaction.followup.send(
-                f"{interaction.user.mention} " + format_achievements(newly), ephemeral=True)
+            await achievement_reply(interaction, interaction.user.mention, newly)
 
 
 class ScopeVaultModal(discord.ui.Modal, title="Vault — how many?"):
@@ -1064,7 +1084,7 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
             if line not in seen:
                 seen.add(line)
                 unique.append(line)
-        await interaction.followup.send(f"{interaction.user.mention} " + format_achievements(unique))
+        await achievement_reply(interaction, interaction.user.mention, unique)
 
 
 @bot.tree.command(name="balance", description="Check money (yours, or a public one).")
@@ -1223,7 +1243,7 @@ async def quicksell_all(interaction: discord.Interaction):
     sync_collectors(uid)
     await interaction.followup.send(f"💸 Sold **{count}** ores for **${earned:,}**! Balance: **${u['balance'] + earned:,}**.")
     if newly:
-        await interaction.followup.send(f"{interaction.user.mention} " + format_achievements(newly))
+        await achievement_reply(interaction, interaction.user.mention, newly)
 
 
 # ----- market -----
@@ -1705,8 +1725,7 @@ async def execute_buy(interaction: discord.Interaction, buyer_id: int, listing_i
         f"✅ {interaction.user.mention} bought **{listing['quality']} {listing['ore']}** "
         f"({config.tier_name(listing['rarity'])}) for **${listing['price']:,}**!")
     if newly:
-        await interaction.followup.send(
-            f"{interaction.user.mention} " + format_achievements(newly))
+        await achievement_reply(interaction, interaction.user.mention, newly)
 
 
 class MarketBrowser(discord.ui.View):
@@ -2757,15 +2776,13 @@ class TradeMainView(discord.ui.View):
             db.add_item(a, ib["rarity"], ib["quality"], ib["ore"], ib.get("origin", "spin"), ib.get("origin_detail", ""))
         trades.pop(t["id"], None)
         db.delete_trade(t["id"])
-        # obtain achievements (incl. Jackpot) for both recipients + collector rechecks
-        notes = []
+        # obtain achievements (incl. Jackpot) per recipient + collector rechecks
+        newly_a, newly_b = [], []
         if ib is not None:
-            for line in check_achievements(a, db.get_user(a), ib["rarity"], ib["quality"]):
-                notes.append(line)
+            newly_a = check_achievements(a, db.get_user(a), ib["rarity"], ib["quality"])
             sync_collectors(a)
         if ia is not None:
-            for line in check_achievements(b, db.get_user(b), ia["rarity"], ia["quality"]):
-                notes.append(line)
+            newly_b = check_achievements(b, db.get_user(b), ia["rarity"], ia["quality"])
             sync_collectors(b)
         if ia is not None and ib is not None:
             result = (f"🔄 **Trade complete!** {t['a_name']} got **{pb['ore']} ({pb['quality']})**, "
@@ -2776,16 +2793,23 @@ class TradeMainView(discord.ui.View):
         else:
             result = (f"🎁 **{t['b_name']}** gave **{pb['ore']} ({pb['quality']})** "
                       f"to **{t['a_name']}**!")
-        if notes:
-            seen, unique = set(), []
-            for line in notes:
-                if line not in seen:
-                    seen.add(line)
-                    unique.append(line)
-            result += "\n" + format_achievements(unique)
         for child in self.children:
             child.disabled = True
         await interaction.response.edit_message(content=result, embed=None, view=self)
+        # reply to the trade pinging both + per-user achievement replies
+        try:
+            ref = t.get("message")
+            await interaction.channel.send(
+                content=f"<@{t['a_id']}> <@{t['b_id']}> 🔄 Trade finished!",
+                reference=ref)
+            if newly_a:
+                await achievement_reply(interaction, f"<@{t['a_id']}>", newly_a,
+                                        ref_message=ref)
+            if newly_b:
+                await achievement_reply(interaction, f"<@{t['b_id']}>", newly_b,
+                                        ref_message=ref)
+        except Exception:
+            pass
 
     async def on_timeout(self):
         t = trades.pop(self.tid, None)
@@ -3082,14 +3106,14 @@ class ScopeGiftModal(discord.ui.Modal, title="Gift — how many?"):
         sync_collectors(g)  # giver may have broken a set
         # recipient obtain checks (Jackpot can fire here)
         first = targets[0] if targets else None
-        extra = ""
+        newly2 = []
         if first and moved > 0:
             newly2 = check_achievements(r, db.get_user(r), first["rarity"], first["quality"])
-            if newly2:
-                extra = "\n" + format_achievements(newly2)
         recip_name = await display_name(interaction, r)
         await interaction.followup.send(
-            f"🎁 Gifted **{moved}x** {what} to **{recip_name}**!{extra}", ephemeral=True)
+            f"🎁 Gifted **{moved}x** {what} to **{recip_name}**!", ephemeral=True)
+        if newly2:
+            await achievement_reply(interaction, f"<@{r}>", newly2)
 
 
 gift_group = app_commands.Group(name="gift", description="Gift ores or money.")
