@@ -55,7 +55,7 @@ ACHIEVEMENTS = {
     "elite_pull":   ("The Mediocre Leagues", "Pull an Elite Tier ore"),
     "dih_pull":     ("The Big Leagues", "Pull a DIH Tier ore"),
     "dih_3":        ("The Bigger Leagues", "Obtain 3 DIH Tier ores"),
-    "perfect_pull": ("Flawless", "Pull a Perfect condition ore"),
+    "perfect_pull": ("Flawless", "Obtain a Perfect condition ore"),
     "perfect_10":   ("Majestic", "Obtain 10 Perfect condition ores"),
     "perfect_30":   ("Divine", "Obtain 30 Perfect condition ores"),
     "jackpot":      ("Jackpot", "Obtain a Perfect DIH Tier ore"),
@@ -92,7 +92,7 @@ ACHIEVEMENTS = {
     "investor":     ("Investor", "Buy a DIH Tier ore from the player market"),
     "supplier":     ("Supplier", "Sell a DIH Tier ore on the player market"),
     "winner":       ("Winner", "Win a BoBo event"),
-    "all_done":     ("It's Over", "Complete every other achievement"),
+    "all_done":     ("It's Over - Achieve it all", "Complete every other achievement"),
 }
 
 # Category emoji (kept for organization; display shows ✅/🔒 only)
