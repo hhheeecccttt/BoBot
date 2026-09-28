@@ -60,6 +60,9 @@ def init_db():
             acquired_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_inv_user ON inventory(user_id);
+        CREATE INDEX IF NOT EXISTS idx_inv_stack ON inventory(user_id, rarity, quality, ore);
+        CREATE INDEX IF NOT EXISTS idx_inv_origin ON inventory(user_id, origin);
+        CREATE INDEX IF NOT EXISTS idx_inv_ore ON inventory(user_id, ore);
         CREATE TABLE IF NOT EXISTS market (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             seller_id TEXT NOT NULL,
@@ -113,6 +116,9 @@ def init_db():
             stored_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_vault_user ON vault(user_id);
+        CREATE INDEX IF NOT EXISTS idx_vault_stack ON vault(user_id, rarity, quality, ore);
+        CREATE INDEX IF NOT EXISTS idx_market_seller ON market(seller_id);
+        CREATE INDEX IF NOT EXISTS idx_ach_user ON achievements(user_id);
         """)
         # --- migrations for DBs created before these columns existed ---
         for _table, _col, _ddl in (
@@ -366,24 +372,38 @@ def get_ore_detail(user_id: str, ore: str, quality: str | None = None) -> list[d
 
 
 def owns_all_ores(user_id: str, ore_names: list[str]) -> bool:
-    """True if the user currently holds at least one of every listed ore (collectors)."""
+    """True if the user currently holds at least one of every listed ore (collectors).
+    Inventory + vault count together."""
     if not ore_names:
         return False
     with _lock, get_conn() as conn:
-        rows = conn.execute("SELECT DISTINCT ore FROM inventory WHERE user_id=?", (user_id,)).fetchall()
-        owned = {r["ore"] for r in rows}
+        owned = {r["ore"] for r in
+                 conn.execute("SELECT DISTINCT ore FROM inventory WHERE user_id=?", (user_id,)).fetchall()}
+        owned |= {r["ore"] for r in
+                  conn.execute("SELECT DISTINCT ore FROM vault WHERE user_id=?", (user_id,)).fetchall()}
         return all(o in owned for o in ore_names)
 
 
 def owns_all_stacks(user_id: str, pairs: list[tuple[str, str]]) -> bool:
-    """True if the user holds every (ore, quality) combo (quality collectors)."""
+    """True if the user holds every (ore, quality) combo (quality collectors).
+    Inventory + vault count together."""
     if not pairs:
         return False
     with _lock, get_conn() as conn:
-        rows = conn.execute("SELECT DISTINCT ore, quality FROM inventory WHERE user_id=?",
-                            (user_id,)).fetchall()
-        owned = {(r["ore"], r["quality"]) for r in rows}
+        owned = {(r["ore"], r["quality"]) for r in conn.execute(
+            "SELECT DISTINCT ore, quality FROM inventory WHERE user_id=?", (user_id,)).fetchall()}
+        owned |= {(r["ore"], r["quality"]) for r in conn.execute(
+            "SELECT DISTINCT ore, quality FROM vault WHERE user_id=?", (user_id,)).fetchall()}
         return all(p in owned for p in pairs)
+
+
+def revoke_achievement(user_id: str, ach_id: str) -> bool:
+    """Returns True if something was removed."""
+    with _lock, get_conn() as conn:
+        cur = conn.execute("DELETE FROM achievements WHERE user_id=? AND ach_id=?",
+                           (user_id, ach_id))
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def latest_rarest(user_id: str, market_bought: bool) -> dict | None:
@@ -517,7 +537,8 @@ def market_browse(ore: str | None = None, quality: str | None = None,
                 f"SELECT * FROM market {where} ORDER BY ABS(price - ?) ASC LIMIT ?",
                 (*params, avg, limit)).fetchall()
         else:
-            order = {"cheapest": "price ASC", "expensive": "price DESC"}.get(sort, "id DESC")
+            order = {"cheapest": "price ASC, id DESC",
+                     "expensive": "price DESC, id DESC"}.get(sort, "id DESC")
             rows = conn.execute(f"SELECT * FROM market {where} ORDER BY {order} LIMIT ?",
                                 (*params, limit)).fetchall()
         return [dict(r) for r in rows]
