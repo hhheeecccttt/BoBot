@@ -270,12 +270,26 @@ class ScopeQuicksellModal(discord.ui.Modal, title="Quicksell"):
     amount = discord.ui.TextInput(label="How many? (number or ALL)", placeholder="e.g. 5 or ALL",
                                   max_length=8)
 
-    def __init__(self, owner_id: int, ore: str | None, quality: str | None, tier: str | None = None):
+    def __init__(self, owner_id: int, ore: str | None, quality: str | None, tier: str | None = None,
+                 bview=None, browser_message=None):
         super().__init__()
         self.owner_id = owner_id
         self.ore = ore
         self.quality = quality
         self.tier = tier
+        self.bview = bview
+        self.browser_message = browser_message
+
+    async def _refresh_browser(self):
+        if self.bview is None or self.browser_message is None:
+            return
+        try:
+            v = self.bview
+            fresh = InvBrowser(v.viewer_id, v.target_id, v.target_name, v.public,
+                               source=v.source, quality=v.quality, ore=v.ore, tier=v.tier)
+            await self.browser_message.edit(embed=fresh.render(), view=fresh)
+        except Exception:
+            pass
 
     async def on_submit(self, interaction: discord.Interaction):
         if interaction.user.id != self.owner_id:
@@ -309,6 +323,7 @@ class ScopeQuicksellModal(discord.ui.Modal, title="Quicksell"):
         db.update_user(uid, balance=u["balance"] + earned, total_earned=u["total_earned"] + earned)
         newly = check_achievements(uid, db.get_user(uid), "", "")
         scope = " ".join(x for x in (self.ore or "", f"({self.quality})" if self.quality else "") if x)
+        await self._refresh_browser()
         await interaction.response.send_message(
             f"💸 Sold **{sold}** ore(s){' ' + scope if scope else ''} for **${earned:,}**!",
             ephemeral=True)
@@ -323,12 +338,26 @@ class ScopeVaultModal(discord.ui.Modal, title="Vault — how many?"):
     amount = discord.ui.TextInput(label="How many? (number or ALL)", placeholder="e.g. 5 or ALL",
                                   max_length=8)
 
-    def __init__(self, owner_id: int, ore: str | None, quality: str | None, tier: str | None = None):
+    def __init__(self, owner_id: int, ore: str | None, quality: str | None, tier: str | None = None,
+                 bview=None, browser_message=None):
         super().__init__()
         self.owner_id = owner_id
         self.ore = ore
         self.quality = quality
         self.tier = tier
+        self.bview = bview
+        self.browser_message = browser_message
+
+    async def _refresh_browser(self):
+        if self.bview is None or self.browser_message is None:
+            return
+        try:
+            v = self.bview
+            fresh = InvBrowser(v.viewer_id, v.target_id, v.target_name, v.public,
+                               source=v.source, quality=v.quality, ore=v.ore, tier=v.tier)
+            await self.browser_message.edit(embed=fresh.render(), view=fresh)
+        except Exception:
+            pass
 
     async def on_submit(self, interaction: discord.Interaction):
         if interaction.user.id != self.owner_id:
@@ -367,6 +396,7 @@ class ScopeVaultModal(discord.ui.Modal, title="Vault — how many?"):
                     break
             if not store_all and moved >= limit:
                 break
+        await self._refresh_browser()
         await interaction.response.send_message(
             f"🗝️ Stored **{moved}** ore(s) in your vault!", ephemeral=True)
 
@@ -375,12 +405,26 @@ class ScopeUnvaultModal(discord.ui.Modal, title="Un-vault — how many?"):
     amount = discord.ui.TextInput(label="How many? (number or ALL)", placeholder="e.g. 5 or ALL",
                                   max_length=8)
 
-    def __init__(self, owner_id: int, ore: str | None, quality: str | None, tier: str | None = None):
+    def __init__(self, owner_id: int, ore: str | None, quality: str | None, tier: str | None = None,
+                 bview=None, browser_message=None):
         super().__init__()
         self.owner_id = owner_id
         self.ore = ore
         self.quality = quality
         self.tier = tier
+        self.bview = bview
+        self.browser_message = browser_message
+
+    async def _refresh_browser(self):
+        if self.bview is None or self.browser_message is None:
+            return
+        try:
+            v = self.bview
+            fresh = InvBrowser(v.viewer_id, v.target_id, v.target_name, v.public,
+                               source=v.source, quality=v.quality, ore=v.ore, tier=v.tier)
+            await self.browser_message.edit(embed=fresh.render(), view=fresh)
+        except Exception:
+            pass
 
     async def on_submit(self, interaction: discord.Interaction):
         if interaction.user.id != self.owner_id:
@@ -418,6 +462,7 @@ class ScopeUnvaultModal(discord.ui.Modal, title="Un-vault — how many?"):
                     break
             if not take_all and moved >= limit:
                 break
+        await self._refresh_browser()
         await interaction.response.send_message(
             f"📦 Took **{moved}** ore(s) out of your vault!", ephemeral=True)
 
@@ -656,8 +701,9 @@ class InvBrowser(discord.ui.View):
             if interaction.user.id != view.viewer_id:
                 await interaction.response.send_message("That's not yours!", ephemeral=True)
                 return
-            await interaction.response.send_modal(
-                ScopeQuicksellModal(view.viewer_id, view.ore, view.quality, view.tier))
+            m = ScopeQuicksellModal(view.viewer_id, view.ore, view.quality, view.tier,
+                                    bview=view, browser_message=interaction.message)
+            await interaction.response.send_modal(m)
         btn = discord.ui.Button(label="Quicksell", style=discord.ButtonStyle.green, emoji="💸")
         btn.callback = cb
         return btn
@@ -669,8 +715,9 @@ class InvBrowser(discord.ui.View):
             if interaction.user.id != view.viewer_id:
                 await interaction.response.send_message("That's not yours!", ephemeral=True)
                 return
-            await interaction.response.send_modal(
-                ScopeVaultModal(view.viewer_id, view.ore, view.quality, view.tier))
+            m = ScopeVaultModal(view.viewer_id, view.ore, view.quality, view.tier,
+                                bview=view, browser_message=interaction.message)
+            await interaction.response.send_modal(m)
         btn = discord.ui.Button(label="Vault", style=discord.ButtonStyle.secondary, emoji="🗝️")
         btn.callback = cb
         return btn
@@ -695,8 +742,9 @@ class InvBrowser(discord.ui.View):
             if interaction.user.id != view.viewer_id:
                 await interaction.response.send_message("That's not yours!", ephemeral=True)
                 return
-            await interaction.response.send_modal(
-                ScopeUnvaultModal(view.viewer_id, view.ore, view.quality, view.tier))
+            m = ScopeUnvaultModal(view.viewer_id, view.ore, view.quality, view.tier,
+                                  bview=view, browser_message=interaction.message)
+            await interaction.response.send_modal(m)
         btn = discord.ui.Button(label="Un-vault", style=discord.ButtonStyle.primary, emoji="📦")
         btn.callback = cb
         return btn
