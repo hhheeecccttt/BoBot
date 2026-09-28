@@ -55,6 +55,7 @@ def init_db():
             quality TEXT NOT NULL,
             ore TEXT NOT NULL,
             origin TEXT NOT NULL DEFAULT 'spin',
+            origin_detail TEXT NOT NULL DEFAULT '',
             acquired_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_inv_user ON inventory(user_id);
@@ -107,6 +108,7 @@ def init_db():
             quality TEXT NOT NULL,
             ore TEXT NOT NULL,
             origin TEXT NOT NULL DEFAULT 'spin',
+            origin_detail TEXT NOT NULL DEFAULT '',
             stored_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_vault_user ON vault(user_id);
@@ -128,11 +130,22 @@ def init_db():
             ("users", "rarest_spin", "TEXT NOT NULL DEFAULT ''"),
             ("users", "rarest_buy", "TEXT NOT NULL DEFAULT ''"),
             ("inventory", "origin", "TEXT NOT NULL DEFAULT 'spin'"),
+            ("inventory", "origin_detail", "TEXT NOT NULL DEFAULT ''"),
+            ("vault", "origin_detail", "TEXT NOT NULL DEFAULT ''"),
         ):
             try:
                 conn.execute(f"ALTER TABLE {_table} ADD COLUMN {_col} {_ddl}")
             except Exception:
                 pass  # already exists
+        # prune unlocks for achievements that no longer exist (keeps x/y honest)
+        try:
+            import config as _cfg
+            valid = list(_cfg.ACHIEVEMENTS.keys())
+            if valid:
+                q = ",".join("?" for _ in valid)
+                conn.execute(f"DELETE FROM achievements WHERE ach_id NOT IN ({q})", valid)
+        except Exception:
+            pass
         conn.commit()
 
 # ---------- users ----------
@@ -188,11 +201,12 @@ def update_streak(user_id: str, today: str) -> dict:
 
 # ---------- inventory ----------
 
-def add_item(user_id: str, rarity: str, quality: str, ore: str, origin: str = "spin") -> int:
+def add_item(user_id: str, rarity: str, quality: str, ore: str, origin: str = "spin",
+             origin_detail: str = "") -> int:
     with _lock, get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO inventory (user_id, rarity, quality, ore, origin) VALUES (?,?,?,?,?)",
-            (user_id, rarity, quality, ore, origin),
+            "INSERT INTO inventory (user_id, rarity, quality, ore, origin, origin_detail) VALUES (?,?,?,?,?,?)",
+            (user_id, rarity, quality, ore, origin, origin_detail),
         )
         conn.commit()
         return cur.lastrowid
@@ -397,6 +411,19 @@ def origin_counts(user_id: str, rarity: str, quality: str, ore: str) -> dict:
         return {r["origin"]: r["count"] for r in rows}
 
 
+def origin_sellers(user_id: str, rarity: str, quality: str, ore: str) -> dict:
+    """Who market-bought stack units came from: {seller_id: count}."""
+    with _lock, get_conn() as conn:
+        rows = conn.execute(
+            """SELECT origin_detail, COUNT(*) as count FROM inventory
+               WHERE user_id=? AND rarity=? AND quality=? AND ore=?
+               AND origin='market' AND origin_detail != ''
+               GROUP BY origin_detail""",
+            (user_id, rarity, quality, ore),
+        ).fetchall()
+        return {r["origin_detail"]: r["count"] for r in rows}
+
+
 def inventory_value(user_id: str, ore: str | None = None, quality: str | None = None) -> tuple[int, int]:
     """(total count, total quicksell value), optionally for one ore / quality. Values via config."""
     import config as _cfg
@@ -509,9 +536,9 @@ def market_buy(listing_id: int, buyer_id: str):
                      (listing["price"], buyer_id))
         conn.execute("UPDATE users SET balance = balance + ?, total_earned = total_earned + ?, sell_count = sell_count + 1 WHERE user_id=?",
                      (listing["price"], listing["price"], listing["seller_id"]))
-        # transfer item (marked as market-bought for inspect provenance)
-        conn.execute("INSERT INTO inventory (user_id, rarity, quality, ore, origin) VALUES (?,?,?,?,?)",
-                     (buyer_id, listing["rarity"], listing["quality"], listing["ore"], "market"))
+        # transfer item (marked as market-bought, seller remembered for inspect)
+        conn.execute("INSERT INTO inventory (user_id, rarity, quality, ore, origin, origin_detail) VALUES (?,?,?,?,?,?)",
+                     (buyer_id, listing["rarity"], listing["quality"], listing["ore"], "market", listing["seller_id"]))
         conn.execute("DELETE FROM market WHERE id=?", (listing_id,))
         conn.commit()
         return True, f"You bought **{listing['quality']} {listing['ore']}** ({listing['rarity']}) for **${listing['price']:,}**!"
@@ -665,6 +692,19 @@ def clear_mail(user_id: str) -> int:
         cur = conn.execute("DELETE FROM mail WHERE user_id=?", (user_id,))
         conn.commit()
         return cur.rowcount
+
+
+def unread_mail_count(user_id: str) -> int:
+    with _lock, get_conn() as conn:
+        row = conn.execute("SELECT COUNT(*) c FROM mail WHERE user_id=? AND is_read=0",
+                           (user_id,)).fetchone()
+        return row["c"]
+
+
+def mark_mail_read(user_id: str):
+    with _lock, get_conn() as conn:
+        conn.execute("UPDATE mail SET is_read=1 WHERE user_id=?", (user_id,))
+        conn.commit()
 
 
 # ---------- vault (same shape as inventory, no quicksell) ----------

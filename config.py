@@ -91,7 +91,7 @@ ACHIEVEMENTS = {
     "customer_10":  ("Regular Customer", "Buy 10 ores on the player market"),
     "investor":     ("Investor", "Buy a DIH Tier ore from the player market"),
     "supplier":     ("Supplier", "Sell a DIH Tier ore on the player market"),
-    "winner":       ("Winner", "Achieve it all"),
+    "winner":       ("Winner", "Win a BoBo event"),
     "all_done":     ("It's Over", "Complete every other achievement"),
 }
 
