@@ -32,10 +32,9 @@ python3 bot.py
 
 | Command | What it does |
 |---|---|
-| `/spin` | Roll rarity + quality + ore. Shows "1 in X". Has a 💸 quicksell button. 3/day, resets 00:00 UTC |
-| `/balance` | Your $ |
-| `/inventory [@user]` | Your ores (private unless you set public) + ore pages, quality filter, totals |
-| `/quicksell_all` | Sell everything |
+| `/spin [amount]` | Roll ores (up to 1000/call); summary for multi-spins |
+| `/inventory [@user]` | Unified browser: All ores, quality filter, inspect, scoped quicksell/vault |
+| `/quicksell_all` | Sell everything (batched, instant even for 30k) |
 | `/market_list` | Pick an ore from a dropdown, set a price in the popup |
 | `/market_view` | Latest + dropdown filters (ore → quality → cheapest/average/priciest), pages, inspect + Buy button |
 | `/market_cancel` | Your latest 10 + dropdowns (ore → quality → pick + button) |
@@ -49,11 +48,11 @@ python3 bot.py
 | `/balance` | Balance, assets, bank + transfer button |
 | `/bank [@user]` | Bank balance + withdraw |
 | `/vault [@user]` | Long-term storage (no quicksell) |
-| `/mail` | Sale + gift notifications (paged) |
-| `/settings` | Privacy: inventory / achievements / stats / vault / bank / market |
+| `/mail [@user]` | Sale + gift notifications (paged) |
+| `/settings` | Privacy: inventory / achievements / stats / vault / bank / balance / mail / market |
 | `/faq` | How quicksell, market, spins work |
 | `/help` | List of every command |
-| Admin: `/admin_give`, `/admin_disable`, `/admin_enable`, `/admin_spins` | Emergencies + events |
+| Admin: `/admin_event_give`, `/admin_give`, `/admin_take`, `/admin_ach_add`, `/admin_ach_remove`, `/admin_disable`, `/admin_enable`, `/admin_spins` | Events + emergencies |
 
 ## Values / odds (from your spec)
 

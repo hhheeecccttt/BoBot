@@ -42,6 +42,8 @@ def init_db():
             bank_public INTEGER NOT NULL DEFAULT 0,
             vault_public INTEGER NOT NULL DEFAULT 0,
             market_public INTEGER NOT NULL DEFAULT 0,
+            mail_public INTEGER NOT NULL DEFAULT 0,
+            balance_public INTEGER NOT NULL DEFAULT 0,
             bank_balance INTEGER NOT NULL DEFAULT 0,
             rarest_spin TEXT NOT NULL DEFAULT '',
             rarest_buy TEXT NOT NULL DEFAULT ''
@@ -120,6 +122,8 @@ def init_db():
             ("users", "bank_public", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "vault_public", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "market_public", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "mail_public", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "balance_public", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "bank_balance", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "rarest_spin", "TEXT NOT NULL DEFAULT ''"),
             ("users", "rarest_buy", "TEXT NOT NULL DEFAULT ''"),
@@ -364,6 +368,21 @@ def owns_all_stacks(user_id: str, pairs: list[tuple[str, str]]) -> bool:
                             (user_id,)).fetchall()
         owned = {(r["ore"], r["quality"]) for r in rows}
         return all(p in owned for p in pairs)
+
+
+def latest_rarest(user_id: str, market_bought: bool) -> dict | None:
+    """Latest item of the rarest tier the user holds.
+    market_bought=True -> only origin='market'; False -> everything else."""
+    import config as _cfg
+    order = " ".join(f"WHEN '{r}' THEN {i}" for i, r in enumerate(_cfg.RARITIES))
+    clause = "origin = 'market'" if market_bought else "origin != 'market'"
+    with _lock, get_conn() as conn:
+        row = conn.execute(
+            f"""SELECT * FROM inventory WHERE user_id=? AND {clause}
+               ORDER BY CASE rarity {order} END DESC, id DESC LIMIT 1""",
+            (user_id,),
+        ).fetchone()
+        return dict(row) if row else None
 
 
 def origin_counts(user_id: str, rarity: str, quality: str, ore: str) -> dict:
@@ -764,6 +783,18 @@ def vault_count(user_id: str) -> int:
     with _lock, get_conn() as conn:
         row = conn.execute("SELECT COUNT(*) c FROM vault WHERE user_id=?", (user_id,)).fetchone()
         return row["c"]
+
+
+def vault_grouped(user_id: str) -> list[dict]:
+    """Aggregated vault stacks: [{rarity, quality, ore, count}, ...]"""
+    with _lock, get_conn() as conn:
+        rows = conn.execute(
+            """SELECT rarity, quality, ore, COUNT(*) as count
+               FROM vault WHERE user_id=? GROUP BY rarity, quality, ore
+               ORDER BY count DESC""",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 # ---------- achievements ----------
