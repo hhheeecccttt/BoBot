@@ -2559,7 +2559,7 @@ async def admin_enable(interaction: discord.Interaction):
 
 
 @bot.tree.command(name="admin_spins", description="[ADMIN] Set spins per day and max per /spin.")
-@app_commands.describe(per_day="Spins per day (number or 'infinite')",
+@app_commands.describe(per_day="Spins per day (number, or -1 for unlimited)",
                        max_at_once="Max per /spin call (number or 'infinite' = 1000)")
 async def admin_spins(interaction: discord.Interaction, per_day: str, max_at_once: str):
     if not is_admin(interaction):
@@ -2568,7 +2568,7 @@ async def admin_spins(interaction: discord.Interaction, per_day: str, max_at_onc
 
     def parse_spins(raw: str, cap: int) -> int | str | None:
         raw = raw.strip().lower()
-        if raw in ("infinite", "inf", "unlimited"):
+        if raw in ("infinite", "inf", "unlimited") or raw == "-1":
             return "inf"
         try:
             v = int(raw)
@@ -2580,7 +2580,7 @@ async def admin_spins(interaction: discord.Interaction, per_day: str, max_at_onc
     mx = parse_spins(max_at_once, 1000)
     if pd is None or mx is None:
         await interaction.response.send_message(
-            "❌ Type a number or `infinite`.", ephemeral=True)
+            "❌ Type a number, `-1` for unlimited, or `infinite`.", ephemeral=True)
         return
     if mx == "inf":
         mx = 1000  # hard cap per call
