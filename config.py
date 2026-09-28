@@ -92,7 +92,7 @@ ACHIEVEMENTS = {
     "investor":     ("Investor", "Buy a DIH Tier ore from the player market"),
     "supplier":     ("Supplier", "Sell a DIH Tier ore on the player market"),
     "winner":       ("Winner", "Win a BoBo event"),
-    "all_done":     ("It's Over - Achieve it all", "Complete every other achievement"),
+    "all_done":     ("It's Over", "Achieve it all"),
 }
 
 # Category emoji (kept for organization; display shows ✅/🔒 only)

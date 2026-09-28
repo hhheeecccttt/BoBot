@@ -44,6 +44,7 @@ def init_db():
             market_public INTEGER NOT NULL DEFAULT 0,
             mail_public INTEGER NOT NULL DEFAULT 0,
             balance_public INTEGER NOT NULL DEFAULT 0,
+            timezone TEXT NOT NULL DEFAULT 'UTC',
             bank_balance INTEGER NOT NULL DEFAULT 0,
             rarest_spin TEXT NOT NULL DEFAULT '',
             rarest_buy TEXT NOT NULL DEFAULT ''
@@ -126,6 +127,7 @@ def init_db():
             ("users", "market_public", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "mail_public", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "balance_public", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "timezone", "TEXT NOT NULL DEFAULT 'UTC'"),
             ("users", "bank_balance", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "rarest_spin", "TEXT NOT NULL DEFAULT ''"),
             ("users", "rarest_buy", "TEXT NOT NULL DEFAULT ''"),

@@ -674,6 +674,14 @@ class InvBrowser(discord.ui.View):
             if self.selected is None:
                 self.selected = (stacks[0]["rarity"], stacks[0]["quality"])
             self.add_item(BrowserInspectSelect(stacks))
+        elif self.source in ("vault", "gift"):
+            # main pages here also get inspect (all stacks, filtered)
+            all_stacks = [r for r in _scope_targets(str(self.target_id), self.source, None,
+                                                    self.quality, self.tier)]
+            all_stacks.sort(key=lambda r: (config.tier_index(r["rarity"]),
+                                           list(config.QUALITIES.keys()).index(r["quality"])))
+            if all_stacks:
+                self.add_item(BrowserInspectSelect(all_stacks))
         elif self.source == "vault":
             # vault main page also gets inspect (all stacks, filtered)
             all_stacks = [r for r in db.vault_grouped(str(self.target_id))
@@ -834,7 +842,7 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
     await interaction.response.defer()
     uid = str(interaction.user.id)
     db.init_db()
-    u = db.reset_spins_if_new_day(uid, today_str())
+    u = db.reset_spins_if_new_day(uid, user_today(uid))
     raw_spd = (db.get_setting("spins_per_day") or "3").strip().lower()
     unlimited_day = raw_spd in ("inf", "infinite", "unlimited")
     try:
@@ -855,7 +863,7 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
         if remaining <= 0:
             await interaction.followup.send(
                 f"❌ You're out of spins! You get **{spins_per_day}** per day.\n"
-                f"⏳ Resets in **{time_until_reset()}**.\n"
+                f"⏳ Resets in **{user_time_until_reset(uid)}**.\n"
                 f"🔥 Streak: **{u['streak']}** day(s) — spin daily to keep it!"
             )
             return
@@ -882,7 +890,7 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
         updates[key[r]] = u[key[r]] + counts[r]
     updates["perfect_pulls"] = u.get("perfect_pulls", 0) + perfect_n
     db.update_user(uid, **updates)
-    u = db.update_streak(uid, today_str())
+    u = db.update_streak(uid, user_today(uid))
     u = db.get_user(uid)
     # rarest spin ever (global best, kept even if sold — stored as rarity|quality|ore)
     try:
@@ -902,12 +910,9 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
     rarities_hit = {p[0] for p in pulls}
     quals_hit = {p[1] for p in pulls}
     newly: list[str] = []
-    for r in order:
-        if r in rarities_hit:
-            newly += check_achievements(uid, u, r, "")
-    for q in config.QUALITIES:
-        if q in quals_hit:
-            newly += check_achievements(uid, u, "", q)
+    # check per distinct (rarity, quality) pair so combo achievements (Jackpot) can fire
+    for r, q in sorted(set(pulls)):
+        newly += check_achievements(uid, u, r, q)
 
     if n == 1:
         rarity, quality, ore = pulls[0]
@@ -1617,6 +1622,7 @@ class MarketBrowser(discord.ui.View):
         elif quality is None:
             self.add_item(MarketOreFilterSelect(owner_id, current=ore, tier=tier))
             self.add_item(MarketQualityFilterSelect(owner_id, ore, tier=tier))
+            self.add_item(MarketSortSelect(owner_id, ore, quality, sort, tier=tier))
             if chunk:
                 self.add_item(MarketListingInspectSelect(chunk))
         elif ore is None:
@@ -2195,7 +2201,8 @@ async def help_cmd(interaction: discord.Interaction):
         "🚫 `/market_cancel` — take down a listing (dropdowns + button)\n"
         "🚫 `/market_cancel_all` — take down ALL listings\n"
         "🔄 `/trade @user` — trade ores (one-sided OK, both accept)\n"
-        "🎁 `/gift @user` — gift ores (they get mail)\n"
+        "🎁 `/gift ore @user` — gift ores (they get mail)\n"
+        "🎁 `/gift money @user` — gift balance/bank money\n"
         "📊 `/stats [@user]` — 3 pages: stats, rarest spin, rarest buy\n"
         "🏆 `/achievements [@user]` — badges (paged + filter)\n"
         "🎲 `/odds` — rarities, odds, values\n"
@@ -2275,44 +2282,56 @@ async def mail(interaction: discord.Interaction, user: discord.User | None = Non
                                             ephemeral=not public)
 
 
-@bot.tree.command(name="faq", description="How things work (quicksell, market, spins).")
+@bot.tree.command(name="faq", description="Coming soon.")
 async def faq(interaction: discord.Interaction):
-    embed = discord.Embed(title="❓ BoBot FAQ — what is this game?", color=0x607D8B)
-    embed.add_field(
-        name="🎰 The game",
-        value="BoBot is an ore-collecting game. Use `/spin` every day (free spins reset at 00:00 UTC, "
-              "e.g. `/spin 10` spins ten at once) to roll ores. Every pull has a **rarity** "
-              "(Low Tier 70% → DIH Tier 0.1%) and a **condition** (Chipped 80%, Scratched 19%, Perfect 1%). "
-              "Rare pulls are worth a fortune. Check `/ores` for the full catalog and `/odds` for the math.",
-        inline=False)
-    embed.add_field(
-        name="💸 What is quickselling?",
-        value="Instantly selling ores for the **lowest value of their rarity** "
-              "(Low Tier $10, Mid Tier $28, High Tier $175, Elite Tier $778, DIH Tier $28,000). "
-              "**Quality is ignored** — a Perfect Copper quicksells for the same $10 as a Chipped one.",
-        inline=False)
-    embed.add_field(
-        name="🤔 When should I use the market instead?",
-        value="Whenever quality matters! A **Perfect Copper** is worth way more than $10 "
-              "to collectors chasing achievements — list it with `/market_list` and sell it there. "
-              "Browse deals with `/market_view`, cancel listings with `/market_cancel`.",
-        inline=False)
-    embed.add_field(
-        name="🎒 Inventory, vault & bank",
-        value="`/inventory` holds what you spin. **Vault** (`/vault`) is long-term storage with no quickselling. "
-              "**Bank** (`/bank`) stores money. Keep streaks alive by spinning daily, "
-              "trade with `/trade`, gift with `/gift`.",
-        inline=False)
-    embed.add_field(
-        name="🏆 Achievements & privacy",
-        value="There are 40+ achievements (`/achievements`) — collectors, money tiers, streaks and more. "
-              "Inventory, stats, achievements, vault, bank, balance, mail and market names are "
-              "**private by default** — open them up in `/settings`.",
-        inline=False)
+    embed = discord.Embed(title="❓ BoBot FAQ", description="Coming soon!",
+                          color=0x607D8B)
     await interaction.response.send_message(embed=embed)
 
 
 # ---------- settings ----------
+
+TIMEZONES = [
+    ("UTC", "UTC"),
+    ("US Eastern", "America/New_York"),
+    ("US Central", "America/Chicago"),
+    ("US Mountain", "America/Denver"),
+    ("US Pacific", "America/Los_Angeles"),
+    ("US Alaska", "America/Anchorage"),
+    ("US Hawaii", "Pacific/Honolulu"),
+    ("UK", "Europe/London"),
+    ("Central Europe", "Europe/Paris"),
+    ("Eastern Europe", "Europe/Bucharest"),
+    ("Brazil", "America/Sao_Paulo"),
+    ("India", "Asia/Kolkata"),
+    ("Singapore", "Asia/Singapore"),
+    ("Japan/Korea", "Asia/Tokyo"),
+    ("Australia East", "Australia/Sydney"),
+    ("New Zealand", "Pacific/Auckland"),
+]
+
+
+def user_tzinfo(uid: str):
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(db.get_user(uid).get("timezone") or "UTC")
+    except Exception:
+        return config.RESET_TIMEZONE
+
+
+def user_today(uid: str) -> str:
+    return datetime.now(user_tzinfo(uid)).date().isoformat()
+
+
+def user_time_until_reset(uid: str) -> str:
+    from datetime import timedelta as _td
+    now = datetime.now(user_tzinfo(uid))
+    tomorrow = (now + _td(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    delta = tomorrow - now
+    h, rem = divmod(int(delta.total_seconds()), 3600)
+    m, _s = divmod(rem, 60)
+    return f"{h}h {m}m"
+
 
 SETTING_DEFS = [
     ("inventory", "inv_public", "🎒 Inventory"),
@@ -2323,6 +2342,7 @@ SETTING_DEFS = [
     ("balance", "balance_public", "💵 Balance"),
     ("mail", "mail_public", "📬 Mail"),
     ("market", "market_public", "🏪 Market listings (your seller name)"),
+    ("timezone", "timezone", "🕐 Timezone"),
 ]
 
 
@@ -2330,11 +2350,15 @@ def settings_embed(uid: str, selected: str) -> discord.Embed:
     u = db.get_user(uid)
     lines = []
     for key, col, label in SETTING_DEFS:
-        state = "🌍 Public" if u.get(col, 0) else "🔒 Private"
+        if key == "timezone":
+            state = f"**{u.get(col, 'UTC')}**"
+        else:
+            state = "🌍 Public" if u.get(col, 0) else "🔒 Private"
         mark = "▶ " if key == selected else ""
-        lines.append(f"{mark}{label}: **{state}**")
-    embed = discord.Embed(title="⚙️ Privacy Settings",
-                          description="\n".join(lines) + "\n\nPublic = others can view it. Private = only you.",
+        lines.append(f"{mark}{label}: {state}")
+    embed = discord.Embed(title="⚙️ Settings",
+                          description="\n".join(lines) + "\n\nPublic = others can view it. "
+                                      "Timezone sets when YOUR day resets.",
                           color=0x607D8B)
     return embed
 
@@ -2358,33 +2382,64 @@ class SettingSelect(discord.ui.Select):
             embed=settings_embed(str(view.owner_id), view.selected), view=view)
 
 
+class ZoneSelect(discord.ui.Select):
+    def __init__(self, current: str):
+        super().__init__(placeholder="Pick your timezone…", options=[
+            discord.SelectOption(label=label, value=tz, default=(tz == current))
+            for label, tz in TIMEZONES
+        ])
+
+    async def callback(self, interaction: discord.Interaction):
+        view: SettingsView = self.view
+        if interaction.user.id != view.owner_id:
+            await interaction.response.send_message("That's not yours! Run `/settings` yourself.",
+                                                    ephemeral=True)
+            return
+        db.update_user(str(view.owner_id), timezone=self.values[0])
+        view.sync_select()
+        await interaction.response.edit_message(
+            embed=settings_embed(str(view.owner_id), view.selected), view=view)
+
+
 class SettingsView(discord.ui.View):
     def __init__(self, owner_id: int):
         super().__init__(timeout=300)
         self.owner_id = owner_id
         self.selected = "inventory"
+        self._rebuild()
+
+    def _rebuild(self):
+        self.clear_items()
         self.setting_select = SettingSelect(self.selected)
         self.add_item(self.setting_select)
+        if self.selected == "timezone":
+            tz = db.get_user(str(self.owner_id)).get("timezone", "UTC")
+            self.add_item(ZoneSelect(tz))
+        else:
+            self.add_item(self._toggle_btn())
+
+    def _toggle_btn(self):
+        view = self
+
+        async def cb(interaction: discord.Interaction):
+            if interaction.user.id != view.owner_id:
+                await interaction.response.send_message("That's not yours! Run `/settings` yourself.",
+                                                        ephemeral=True)
+                return
+            uid = str(view.owner_id)
+            col = next(c for k, c, _ in SETTING_DEFS if k == view.selected)
+            u = db.get_user(uid)
+            db.update_user(uid, **{col: 0 if u.get(col, 0) else 1})
+            await interaction.response.edit_message(
+                embed=settings_embed(uid, view.selected), view=view)
+        btn = discord.ui.Button(label="Switch private/public",
+                                style=discord.ButtonStyle.primary, emoji="🔄")
+        btn.callback = cb
+        return btn
 
     def sync_select(self):
         """Rebuild dropdown options so the shown selection matches."""
-        self.setting_select.options = [
-            discord.SelectOption(label=label, value=key, default=(key == self.selected))
-            for key, _, label in SETTING_DEFS
-        ]
-
-    @discord.ui.button(label="Switch private/public", style=discord.ButtonStyle.primary, emoji="🔄")
-    async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("That's not yours! Run `/settings` yourself.",
-                                                    ephemeral=True)
-            return
-        uid = str(self.owner_id)
-        col = next(c for k, c, _ in SETTING_DEFS if k == self.selected)
-        u = db.get_user(uid)
-        db.update_user(uid, **{col: 0 if u.get(col, 0) else 1})
-        await interaction.response.edit_message(
-            embed=settings_embed(uid, self.selected), view=self)
+        self._rebuild()
 
 
 @bot.tree.command(name="settings", description="Privacy settings (inventory, achievements, stats).")
@@ -2983,9 +3038,12 @@ class ScopeGiftModal(discord.ui.Modal, title="Gift — how many?"):
             f"🎁 Gifted **{moved}x** {what} to **{recip_name}**!", ephemeral=True)
 
 
-@bot.tree.command(name="gift", description="Gift ores to another player (they get mail).")
+gift_group = app_commands.Group(name="gift", description="Gift ores or money.")
+
+
+@gift_group.command(name="ore", description="Gift ores to another player (they get mail).")
 @app_commands.describe(user="Who gets the gift")
-async def gift(interaction: discord.Interaction, user: discord.User):
+async def gift_ore(interaction: discord.Interaction, user: discord.User):
     if user.id == interaction.user.id:
         await interaction.response.send_message("❌ You can't gift yourself!", ephemeral=True)
         return
@@ -3000,6 +3058,80 @@ async def gift(interaction: discord.Interaction, user: discord.User):
                       recip_id=user.id,
                       recip_name=await display_name(interaction, str(user.id)))
     await interaction.response.send_message(embed=view.render(), view=view, ephemeral=True)
+
+
+@gift_group.command(name="money", description="Gift money from balance or bank.")
+@app_commands.describe(user="Who gets the money", amount="How much ($)",
+                       source="Take it from balance or bank")
+@app_commands.choices(source=[app_commands.Choice(name="Balance", value="balance"),
+                              app_commands.Choice(name="Bank", value="bank")])
+async def gift_money(interaction: discord.Interaction, user: discord.User,
+                     amount: app_commands.Range[int, 1, 100_000_000], source: str):
+    if user.id == interaction.user.id:
+        await interaction.response.send_message("❌ You can't gift yourself!", ephemeral=True)
+        return
+    if user.bot:
+        await interaction.response.send_message("❌ You can't gift a bot!", ephemeral=True)
+        return
+    u = db.get_user(str(interaction.user.id))
+    avail = u["balance"] if source == "balance" else u.get("bank_balance", 0)
+    if avail < amount:
+        await interaction.response.send_message(
+            f"❌ Only **${avail:,}** in {source}.", ephemeral=True)
+        return
+    view = GiftMoneyView(interaction.user.id, user.id,
+                         await display_name(interaction, str(user.id)), amount, source)
+    embed = discord.Embed(title="🎁 Confirm gift",
+                          description=f"Send **${amount:,}** from your **{source}** to "
+                                      f"**{(await display_name(interaction, str(user.id)))}**?",
+                          color=0x4CAF50)
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+class GiftMoneyView(discord.ui.View):
+    def __init__(self, giver_id: int, recip_id: int, recip_name: str, amount: int, source: str):
+        super().__init__(timeout=180)
+        self.giver_id = giver_id
+        self.recip_id = recip_id
+        self.recip_name = recip_name
+        self.amount = amount
+        self.source = source
+
+    @discord.ui.button(label="Send", style=discord.ButtonStyle.green, emoji="🎁")
+    async def send(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.giver_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        g, r = str(self.giver_id), str(self.recip_id)
+        u = db.get_user(g)
+        avail = u["balance"] if self.source == "balance" else u.get("bank_balance", 0)
+        if avail < self.amount:
+            await interaction.response.send_message("❌ Not enough left!", ephemeral=True)
+            return
+        if self.source == "balance":
+            db.update_user(g, balance=u["balance"] - self.amount)
+        else:
+            db.update_user(g, bank_balance=u.get("bank_balance", 0) - self.amount)
+        ru = db.get_user(r)
+        db.update_user(r, balance=ru["balance"] + self.amount)
+        check_achievements(r, db.get_user(r), "", "")  # money tiers still unlock
+        giver_name = await display_name(interaction, g)
+        db.add_mail(r, f"🎁 **{giver_name}** gifted you **${self.amount:,}**!")
+        button.disabled = True
+        await interaction.response.edit_message(
+            content=f"🎁 Sent **${self.amount:,}** to **{self.recip_name}**!", embed=None, view=self)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="✖")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.giver_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content="Cancelled.", embed=None, view=self)
+
+
+bot.tree.add_command(gift_group)
 
 
 if __name__ == "__main__":

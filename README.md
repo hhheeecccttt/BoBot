@@ -40,6 +40,8 @@ python3 bot.py
 | `/market_cancel` | Your latest 10 + dropdowns (ore → quality → pick + button) |
 | `/market_cancel_all` | Cancel every listing, items return to you |
 | `/trade @player` | Trade ores (one-sided OK, both accept) |
+| `/gift ore @player` | Gift ores (they get mail) |
+| `/gift money @player` | Gift balance/bank money (confirm UI) |
 | `/stats [@user]` | Spins, pulls, streak, balance, assets, rarest spin/buy, achievement count |
 | `/achievements [@user]` | Badges (paged, filterable) |
 | `/odds` | Rarities, odds, quicksell values |
