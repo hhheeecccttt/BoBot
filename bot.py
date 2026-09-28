@@ -183,16 +183,9 @@ def current_collectors(user_id: str) -> set[str]:
 
 
 def sync_collectors(user_id: str) -> list[str]:
-    """Revoke collector achievements whose set is broken. Returns revoked display names."""
-    have = set(db.get_achievements(user_id)) & set(COLLECTOR_IDS)
-    revoked = []
-    for aid in have - current_collectors(user_id):
-        if db.revoke_achievement(user_id, aid):
-            revoked.append(f"**{config.ACHIEVEMENTS[aid][0]}**")
-    if revoked:
-        db.add_mail(user_id, "💔 Lost achievement" + ("s" if len(revoked) > 1 else "") +
-                    " (set broken): " + ", ".join(revoked))
-    return revoked
+    """Achievements can no longer be lost — this is intentionally a no-op.
+    (Kept so all existing call sites keep working.)"""
+    return []
 
 
 def format_achievements(newly: list[str]) -> str:
