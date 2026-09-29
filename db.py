@@ -416,12 +416,8 @@ def owns_all_ores(user_id: str, ore_names: list[str]) -> bool:
     Inventory + vault count together."""
     if not ore_names:
         return False
-    with _lock, get_conn() as conn:
-        owned = {r["ore"] for r in
-                 conn.execute("SELECT DISTINCT ore FROM inventory WHERE user_id=?", (user_id,)).fetchall()}
-        owned |= {r["ore"] for r in
-                  conn.execute("SELECT DISTINCT ore FROM vault WHERE user_id=?", (user_id,)).fetchall()}
-        return all(o in owned for o in ore_names)
+    owned, _ = owned_sets(user_id)
+    return all(o in owned for o in ore_names)
 
 
 def owns_all_stacks(user_id: str, pairs: list[tuple[str, str]]) -> bool:
@@ -429,12 +425,23 @@ def owns_all_stacks(user_id: str, pairs: list[tuple[str, str]]) -> bool:
     Inventory + vault count together."""
     if not pairs:
         return False
+    _, owned_pairs = owned_sets(user_id)
+    return all(p in owned_pairs for p in pairs)
+
+
+def owned_sets(user_id: str) -> tuple[set, set]:
+    """All owned ores + (ore, quality) pairs across inventory AND vault.
+    ONE round trip — used by the collector scan so big inventories stay fast."""
     with _lock, get_conn() as conn:
-        owned = {(r["ore"], r["quality"]) for r in conn.execute(
-            "SELECT DISTINCT ore, quality FROM inventory WHERE user_id=?", (user_id,)).fetchall()}
-        owned |= {(r["ore"], r["quality"]) for r in conn.execute(
-            "SELECT DISTINCT ore, quality FROM vault WHERE user_id=?", (user_id,)).fetchall()}
-        return all(p in owned for p in pairs)
+        rows = conn.execute(
+            """SELECT DISTINCT ore, quality FROM inventory WHERE user_id=?
+               UNION
+               SELECT DISTINCT ore, quality FROM vault WHERE user_id=?""",
+            (user_id, user_id),
+        ).fetchall()
+        ores = {r["ore"] for r in rows}
+        pairs = {(r["ore"], r["quality"]) for r in rows}
+        return ores, pairs
 
 
 def revoke_achievement(user_id: str, ach_id: str) -> bool:
@@ -591,6 +598,36 @@ def market_browse(guild_id: str, ore: str | None = None, quality: str | None = N
             rows = conn.execute(f"SELECT * FROM market {where} ORDER BY {order} LIMIT ?",
                                 (*params, limit)).fetchall()
         return [dict(r) for r in rows]
+
+
+def market_buy_many(guild_id: str, buyer_id: str, ore: str, quality: str, n: int):
+    """Buy up to n cheapest matching listings (not your own). One transaction.
+    Returns (bought_rows, total_price)."""
+    bought, total = [], 0
+    with _lock, get_conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM market WHERE guild_id=? AND ore=? AND quality=?
+               AND seller_id != ? ORDER BY price ASC, id DESC LIMIT ?""",
+            (guild_id, ore, quality, buyer_id, max(0, n)),
+        ).fetchall()
+        rows = [dict(r) for r in rows]
+        if not rows:
+            return [], 0
+        total = sum(r["price"] for r in rows)
+        buyer = conn.execute("SELECT * FROM users WHERE user_id=?", (buyer_id,)).fetchone()
+        if buyer is None or (buyer["balance"] or 0) < total:
+            return None, total  # None = can't afford
+        for l in rows:
+            conn.execute("UPDATE users SET balance = balance - ?, buy_count = buy_count + 1 WHERE user_id=?",
+                         (l["price"], buyer_id))
+            conn.execute("UPDATE users SET balance = balance + ?, total_earned = total_earned + ?, sell_count = sell_count + 1 WHERE user_id=?",
+                         (l["price"], l["price"], l["seller_id"]))
+            conn.execute("INSERT INTO inventory (user_id, rarity, quality, ore, origin, origin_detail) VALUES (?,?,?,?,?,?)",
+                         (buyer_id, l["rarity"], l["quality"], l["ore"], "market", l["seller_id"]))
+            conn.execute("DELETE FROM market WHERE id=?", (l["id"],))
+            bought.append(l)
+        conn.commit()
+        return bought, total
 
 
 def market_buy(listing_id: int, buyer_id: str, guild_id: str | None = None):

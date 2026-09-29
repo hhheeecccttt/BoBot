@@ -174,23 +174,25 @@ COLLECTOR_IDS = (
 
 
 def current_collectors(user_id: str) -> set[str]:
-    """Collectors the user qualifies for RIGHT NOW (inventory + vault together)."""
+    """Collectors the user qualifies for RIGHT NOW (inventory + vault together).
+    Single DB round trip so huge inventories stay fast."""
+    owned_ores, owned_pairs = db.owned_sets(user_id)
     earned = set()
     for tier, aid in (("Low", "collector_low"), ("Mid", "collector_mid"),
                       ("High", "collector_high"), ("Elite", "collector_elite"),
                       ("DIH", "collector_dih")):
-        if db.owns_all_ores(user_id, config.ORES[tier]):
+        if all(o in owned_ores for o in config.ORES[tier]):
             earned.add(aid)
-    if all(db.owns_all_ores(user_id, ores) for ores in config.ORES.values()):
+    if all(o in owned_ores for ores in config.ORES.values() for o in ores):
         earned.add("collector_all")
     quals = list(config.QUALITIES.keys())
     for tier, aid in (("Low", "qcollector_low"), ("Mid", "qcollector_mid"),
                       ("High", "qcollector_high"), ("Elite", "qcollector_elite"),
                       ("DIH", "qcollector_dih")):
-        if db.owns_all_stacks(user_id, [(o, q) for o in config.ORES[tier] for q in quals]):
+        if all((o, q) in owned_pairs for o in config.ORES[tier] for q in quals):
             earned.add(aid)
-    if db.owns_all_stacks(user_id, [(o, q) for ores in config.ORES.values()
-                                    for o in ores for q in quals]):
+    if all((o, q) in owned_pairs for ores in config.ORES.values()
+           for o in ores for q in quals):
         earned.add("qcollector_all")
     return earned
 
@@ -1007,14 +1009,15 @@ async def vault(interaction: discord.Interaction, user: discord.User | None = No
         await interaction.response.send_message(
             f"🔒 **{(await display_name(interaction, tid))}'s** vault is private.", ephemeral=True)
         return
+    await interaction.response.defer(ephemeral=not public)
     if db.vault_count(tid) == 0:
-        await interaction.response.send_message("🗝️ Vault is empty! Store ores via inventory.",
-                                                ephemeral=not public)
+        await interaction.followup.send("🗝️ Vault is empty! Store ores via inventory.",
+                                        ephemeral=not public)
         return
     name = await display_name(interaction, tid)
     view = InvBrowser(interaction.user.id, target.id, name, public, source="vault",
                       guild=guild_scope(interaction))
-    await interaction.response.send_message(embed=view.render(), view=view, ephemeral=not public)
+    await interaction.followup.send(embed=view.render(), view=view, ephemeral=not public)
 
 
 # ---------- bot events ----------
@@ -1325,13 +1328,14 @@ async def inventory(interaction: discord.Interaction, user: discord.User | None 
         await interaction.response.send_message(
             f"🔒 **{(await display_name(interaction, tid))}'s** inventory is private.", ephemeral=True)
         return
+    await interaction.response.defer(ephemeral=not public)
     if db.count_inventory(tid) == 0:
-        await interaction.response.send_message("🎒 Inventory is empty!", ephemeral=not public)
+        await interaction.followup.send("🎒 Inventory is empty!", ephemeral=not public)
         return
     name = await display_name(interaction, tid)
     view = InvBrowser(interaction.user.id, target.id, name, public, source="inv",
                       guild=guild_scope(interaction))
-    await interaction.response.send_message(embed=view.render(), view=view, ephemeral=not public)
+    await interaction.followup.send(embed=view.render(), view=view, ephemeral=not public)
 
 
 @bot.tree.command(name="quicksell_all", description="Sell your ENTIRE inventory instantly.")
@@ -2404,6 +2408,9 @@ async def ores(interaction: discord.Interaction):
     await interaction.response.send_message(embed=view.make_embed(), view=view)
 
 
+_name_cache: dict[int, str] = {}
+
+
 async def display_name(interaction: discord.Interaction, user_id: str) -> str:
     """Plain name, never a ping. Accepts scoped ('guild:user') or raw ids."""
     try:
@@ -2414,11 +2421,15 @@ async def display_name(interaction: discord.Interaction, user_id: str) -> str:
         m = interaction.guild.get_member(uid)
         if m:
             return m.display_name
+    if uid in _name_cache:
+        return _name_cache[uid]
     u = interaction.client.get_user(uid)
     if u:
+        _name_cache[uid] = u.display_name
         return u.display_name
     try:
         u = await interaction.client.fetch_user(uid)
+        _name_cache[uid] = u.display_name
         return u.display_name
     except Exception:
         return f"User {uid}"
@@ -2435,11 +2446,13 @@ async def baltop(interaction: discord.Interaction):
     medals = ["🥇", "🥈", "🥉"]
     lines = []
     top_ids = set()
+    # resolve names concurrently (each can cost an API call)
+    import asyncio as _aio
+    names = await _aio.gather(*[display_name(interaction, row["user_id"]) for row in top])
     for i, row in enumerate(top):
         top_ids.add(row["user_id"])
         medal = medals[i] if i < 3 else f"`#{i+1}`"
-        name = await display_name(interaction, row["user_id"])
-        lines.append(f"{medal} **{name}** — **${row['balance']:,}** ({row['total_spins']} spins)")
+        lines.append(f"{medal} **{names[i]}** — **${row['balance']:,}** ({row['total_spins']} spins)")
     # If the caller isn't on the board, show their placement relative to everyone
     uid = SUID(interaction)
     if uid not in top_ids:
