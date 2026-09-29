@@ -737,6 +737,10 @@ class InvBrowser(discord.ui.View):
         self.gift_from = gift_from
         self._rebuild()
 
+    def _t(self) -> str:
+        """Scoped target id for all DB reads in this browser."""
+        return f"{self.guild}:{self.target_id}"
+
     def _inv(self) -> bool:
         return self.source in ("inv", "gift", "trade")
 
@@ -1179,7 +1183,7 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
     # collectors scanned once (first pair) instead of per pair
     newly: list[str] = []
     first = True
-    for r, q in sorted(set(pulls)):
+    for r, q, _o in sorted(set(pulls)):
         try:
             newly += check_achievements(uid, u, r, q, collectors=first, pulled=True)
         except Exception as e:
