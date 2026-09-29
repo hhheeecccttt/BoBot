@@ -281,7 +281,7 @@ class SpinView(discord.ui.View):
         u = db.reset_spins_if_new_day(uid, user_today(uid))
         if not UNLIMITED_SPINS:
             try:
-                spd = max(1, int(db.get_setting("spins_per_day") or 3))
+                spd = max(1, int(db.get_setting("spins_per_day", guild_scope(interaction)) or 3))
             except ValueError:
                 spd = 3
             if u["spins_used_today"] >= spd:
@@ -306,11 +306,12 @@ class SpinView(discord.ui.View):
             embed.add_field(name="🌟", value="**DIH TIER PULL!!** Insane luck.", inline=False)
         view = SpinView(interaction.user.id, item_id, rarity, quality, ore)
         view.children[0].label = f"Quicksell ${value:,}"
-        await interaction.followup.send(content=await _spin_ping(uid, interaction),
-                                        embed=embed, view=view)
+        result_msg = await interaction.followup.send(content=await _spin_ping(uid, interaction),
+                                                     embed=embed, view=view)
         newly = check_achievements(uid, db.get_user(uid), rarity, quality)
         if newly:
-            await achievement_reply(interaction, interaction.user.mention, newly)
+            await achievement_reply(interaction, interaction.user.mention, newly,
+                                    ref_message=result_msg)
 
 
 # ---------- inventory (two levels: ore page -> quality stacks) ----------
@@ -359,7 +360,7 @@ async def inspect_text(interaction: discord.Interaction, uid: str, rarity: str, 
 
 def _scope_targets(uid: str, source: str, ore: str | None, quality: str | None,
                    tier: str | None = None) -> list[dict]:
-    items = db.get_inventory_grouped(uid) if source in ("inv", "gift", "trade") else db.vault_grouped(uid)
+    items = db.get_inventory_grouped(uid) if source in ("inv", "gift", "trade", "list") else db.vault_grouped(uid)
     return [i for i in items
             if (ore is None or i["ore"] == ore)
             and (quality is None or i["quality"] == quality)
@@ -429,11 +430,12 @@ class ScopeQuicksellModal(discord.ui.Modal, title="Quicksell"):
         sync_collectors(uid)
         scope = " ".join(x for x in (self.ore or "", f"({self.quality})" if self.quality else "") if x)
         await self._refresh_browser()
-        await interaction.followup.send(
+        result_msg = await interaction.followup.send(
             f"💸 Sold **{sold}** ore(s){' ' + scope if scope else ''} for **${earned:,}**!",
             ephemeral=True)
         if newly:
-            await achievement_reply(interaction, interaction.user.mention, newly)
+            await achievement_reply(interaction, interaction.user.mention, newly,
+                                    ref_message=result_msg)
 
 
 class ScopeVaultModal(discord.ui.Modal, title="Vault — how many?"):
@@ -619,13 +621,15 @@ class BrowserQualitySelect(discord.ui.Select):
 
 class BrowserOreSelect(discord.ui.Select):
     def __init__(self, ores: list[dict], current: str | None):
+        # bare ore names (tier lives in the tier dropdown)
         options = [discord.SelectOption(label="All ores", value="all",
                                         default=(current is None))]
         for o in ores[:24]:
             options.append(discord.SelectOption(
-                label=f"{ore_tier_label(o['ore'], o['rarities'])} x{o['count']}"[:100],
+                label=f"{o['ore']} x{o['count']}"[:100],
                 value=o["ore"], default=(o["ore"] == current)))
         super().__init__(placeholder="Choose which ore page to open…", options=options)
+        self._ores = ores
 
     async def callback(self, interaction: discord.Interaction):
         view: InvBrowser = self.view
@@ -635,6 +639,11 @@ class BrowserOreSelect(discord.ui.Select):
             return
         view.ore = None if self.values[0] == "all" else self.values[0]
         view.selected = None
+        # auto-match the tier dropdown to the picked ore
+        if view.ore:
+            match = next((o for o in self._ores if o["ore"] == view.ore), None)
+            if match and match["rarities"]:
+                view.tier = sorted(match["rarities"], key=config.tier_index)[0]
         embed = view.render()
         await interaction.response.edit_message(embed=embed, view=view)
 
@@ -722,7 +731,7 @@ class InvBrowser(discord.ui.View):
         return f"{self.guild}:{self.target_id}"
 
     def _inv(self) -> bool:
-        return self.source in ("inv", "gift", "trade")
+        return self.source in ("inv", "gift", "trade", "list")
 
     # ----- data -----
     def overviews(self) -> list[dict]:
@@ -767,10 +776,11 @@ class InvBrowser(discord.ui.View):
             stacks = []
             ores = self.overviews()
         n, v = self.totals()
-        icon = {"inv": "🎒", "vault": "🗝️", "gift": "🎁", "trade": "🔄"}.get(self.source, "🎒")
+        icon = {"inv": "🎒", "vault": "🗝️", "gift": "🎁", "trade": "🔄", "list": "📦"}.get(
+            self.source, "🎒")
         what = {"inv": "Inventory", "vault": "Vault",
-                "gift": f"Gift for {self.recip_name}", "trade": "Trade offer"}.get(
-            self.source, "Inventory")
+                "gift": f"Gift for {self.recip_name}", "trade": "Trade offer",
+                "list": "List an ore"}.get(self.source, "Inventory")
         if self.ore:
             r0 = min(stacks, key=lambda s: config.tier_index(s["rarity"]))["rarity"] if stacks else None
             dot = config.RARITIES[r0]["dot"] if r0 else icon
@@ -799,28 +809,27 @@ class InvBrowser(discord.ui.View):
             ores = self.overviews()
         if stacks is None:
             stacks = self.stacks()
-        # tier hides once an ore is picked (ore implies its tier)
-        if self.ore is None:
-            self.add_item(BrowserTierSelect(self.tier))
+        # tier always stays up (auto-matches the picked ore)
+        self.add_item(BrowserTierSelect(self.tier))
         self.add_item(BrowserOreSelect(ores, self.ore))
         self.add_item(BrowserQualitySelect(self.quality))
-        # inspect lives behind a button opening a pop-up (all UIs)
-        inspect_stacks = None
+        # inspect button on every UI; grayed unless tier+ore+quality all picked
         if self.ore and stacks:
             if self.selected is None:
                 self.selected = (stacks[0]["rarity"], stacks[0]["quality"])
             inspect_stacks = stacks
-        elif self.source in ("vault", "gift", "inv"):
+        else:
             all_stacks = [r for r in _scope_targets(f"{self.guild}:{self.target_id}", self.source, None,
                                                     self.quality, self.tier)]
             all_stacks.sort(key=lambda r: (config.tier_index(r["rarity"]),
                                            list(config.QUALITIES.keys()).index(r["quality"])))
-            if all_stacks:
-                inspect_stacks = all_stacks
+            inspect_stacks = all_stacks or None
+        full = bool(self.tier and self.ore and self.quality)
         if inspect_stacks:
-            self.add_item(self._inspect_btn(inspect_stacks))
+            self.add_item(self._inspect_btn(inspect_stacks, disabled=not full))
         mine = self.viewer_id == self.target_id
         scoped = self.ore is not None or self.quality is not None or self.tier is not None
+        full = bool(self.tier and self.ore and self.quality)
         if mine and scoped:
             if self.source == "inv":
                 self.add_item(self._qs_btn())
@@ -831,10 +840,10 @@ class InvBrowser(discord.ui.View):
                 self.add_item(self._gift_btn())
             elif self.source == "trade" and self.ore and stacks:
                 self.add_item(self._trade_select_btn())
-            elif self.source == "trade" and self.ore and stacks:
-                self.add_item(self._trade_select_btn())
+            elif self.source == "list" and full:
+                self.add_item(self._list_this_btn())
 
-    def _inspect_btn(self, stacks: list[dict]):
+    def _inspect_btn(self, stacks: list[dict], disabled: bool = False):
         view = self
 
         async def cb(interaction: discord.Interaction):
@@ -847,6 +856,20 @@ class InvBrowser(discord.ui.View):
                 content=f"🔍 Inspect — pick a stack ({len(stacks)} shown):",
                 view=pop, ephemeral=True)
         btn = discord.ui.Button(label="Inspect", style=discord.ButtonStyle.secondary, emoji="🔍")
+        btn.callback = cb
+        return btn
+
+    def _list_this_btn(self):
+        view = self
+
+        async def cb(interaction: discord.Interaction):
+            if interaction.user.id != view.viewer_id:
+                await interaction.response.send_message("That's not yours!", ephemeral=True)
+                return
+            await interaction.response.send_modal(
+                ListAmountModal(view.viewer_id, view.ore, view.quality, view.tier,
+                                bview=view, browser_message=interaction.message))
+        btn = discord.ui.Button(label="List this", style=discord.ButtonStyle.green, emoji="📋")
         btn.callback = cb
         return btn
 
@@ -1114,9 +1137,9 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
         if item_id is not None:
             view = SpinView(interaction.user.id, item_id, rarity, quality, ore)
             view.children[0].label = f"Quicksell ${value:,}"
-            await interaction.followup.send(content=ping, embed=embed, view=view)
+            result_msg = await interaction.followup.send(content=ping, embed=embed, view=view)
         else:
-            await interaction.followup.send(content=ping, embed=embed)
+            result_msg = await interaction.followup.send(content=ping, embed=embed)
     else:
         # summary for multi-spins: rarest pull first
         best = max(pulls, key=lambda p: (SPIN_ORDER.index(p[0]),
@@ -1134,7 +1157,7 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
         embed.add_field(name="💰 Haul quicksell value", value=f"${haul_value:,}", inline=True)
         embed.add_field(name="🎰 Spins left today", value=spins_left_text, inline=True)
         embed.set_footer(text=f"🔥 {u['streak']}-day streak • {interaction.user.display_name}")
-        await interaction.followup.send(content=ping, embed=embed)
+        result_msg = await interaction.followup.send(content=ping, embed=embed)
     # achievements AFTER the result so "thinking" always resolves fast;
     # collectors scanned once (first pair) instead of per pair
     newly: list[str] = []
@@ -1153,7 +1176,8 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
             if line not in seen:
                 seen.add(line)
                 unique.append(line)
-        await achievement_reply(interaction, interaction.user.mention, unique)
+        await achievement_reply(interaction, interaction.user.mention, unique,
+                                ref_message=result_msg)
 
 
 @bot.tree.command(name="balance", description="Check money (yours, or a public one).")
@@ -1311,196 +1335,123 @@ async def quicksell_all(interaction: discord.Interaction):
     db.update_user(uid, balance=u["balance"] + earned, total_earned=u["total_earned"] + earned)
     newly = check_achievements(uid, db.get_user(uid), "", "")
     sync_collectors(uid)
-    await interaction.followup.send(f"💸 Sold **{count}** ores for **${earned:,}**! Balance: **${u['balance'] + earned:,}**.")
+    result_msg = await interaction.followup.send(f"💸 Sold **{count}** ores for **${earned:,}**! Balance: **${u['balance'] + earned:,}**.")
     if newly:
-        await achievement_reply(interaction, interaction.user.mention, newly)
+        await achievement_reply(interaction, interaction.user.mention, newly,
+                                ref_message=result_msg)
 
 
 # ----- market -----
 
-class MarketPriceModal(discord.ui.Modal, title="Set your price"):
-    def __init__(self, owner_id: int, rarity: str, quality: str, ore: str):
+# ---------- market listing (amount first, then price) ----------
+
+class ListAmountModal(discord.ui.Modal, title="List — how many?"):
+    amount = discord.ui.TextInput(label="How many to list? (number or ALL)",
+                                  placeholder="e.g. 3 or ALL", max_length=8)
+
+    def __init__(self, owner_id: int, ore: str | None, quality: str | None,
+                 tier: str | None = None, bview=None, browser_message=None):
         super().__init__()
         self.owner_id = owner_id
-        self.rarity = rarity
-        self.quality = quality
         self.ore = ore
-
-    price = discord.ui.TextInput(label="Price ($)", placeholder="e.g. 500", max_length=12)
+        self.quality = quality
+        self.tier = tier
+        self.bview = bview
+        self.browser_message = browser_message
 
     async def on_submit(self, interaction: discord.Interaction):
         if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("That's not your listing!", ephemeral=True)
-            return
-        try:
-            amount = int(str(self.price.value).replace(",", "").replace("$", "").strip())
-        except ValueError:
-            await interaction.response.send_message("❌ Price must be a whole number, e.g. `500`.", ephemeral=True)
-            return
-        if amount < 1:
-            await interaction.response.send_message("❌ Price must be at least $1.", ephemeral=True)
-            return
-        listing_id = db.market_list(guild_scope(interaction), SUID(interaction, self.owner_id),
-                                    self.rarity, self.quality, self.ore, amount)
-        if listing_id is None:
-            await interaction.response.send_message("❌ You don't own that ore anymore.", ephemeral=True)
-            return
-        sync_collectors(SUID(interaction, self.owner_id))  # listing removes it from inventory
-        quick = config.quicksell_value(self.rarity)
-        await interaction.response.send_message(
-            f"📦 Listed **{self.quality} {self.ore}** ({config.tier_name(self.rarity)}) for **${amount:,}**! (ID: `{listing_id}`)\n"
-            f"Quicksell value would've been ${quick:,} — {'🤑 profit mindset!' if amount > quick else '⚠️ cheaper than quicksell!'}"
-        )
-
-
-class MarketSellTierSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, current: str | None = None):
-        self.owner_id = owner_id
-        super().__init__(placeholder="Filter by tier…", options=[
-            discord.SelectOption(label="All tiers", value="all", default=(current is None))
-        ] + [discord.SelectOption(label=config.tier_name(r), value=r,
-                                   default=(r == current),
-                                   emoji=config.RARITIES[r].get("dot", ""))
-             for r in config.RARITIES])
-
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("That's not your inventory!", ephemeral=True)
-            return
-        view: MarketSellView = self.view
-        view.tier = None if self.values[0] == "all" else self.values[0]
-        view.refresh_ores()
-        await interaction.response.edit_message(embed=view.make_embed(), view=view)
-
-
-class MarketSellSelect(discord.ui.Select):
-    """Level 1: pick which ore to list (same look as inventory)."""
-
-    def __init__(self, owner_id: int, ores: list[dict], tier: str | None = None):
-        self.owner_id = owner_id
-        self.tier = tier
-        if tier:
-            ores = [o for o in ores if tier in o["rarities"]]
-        options = []
-        for o in ores[:25]:  # Discord limit
-            label = f"{ore_tier_label(o['ore'], o['rarities'])} x{o['count']}"[:100]
-            options.append(discord.SelectOption(label=label, value=o["ore"]))
-        super().__init__(placeholder="Choose which ore to list…", options=options or [
-            discord.SelectOption(label="(nothing in this tier)", value="none")])
-
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("That's not your inventory!", ephemeral=True)
-            return
-        if self.values[0] == "none":
-            return
-        ore = self.values[0]
-        stacks = db.get_ore_detail(SUID(interaction, self.owner_id), ore)
-        if self.tier:
-            stacks = [s for s in stacks if s["rarity"] == self.tier]
-        if not stacks:
-            await interaction.response.send_message("Nothing there anymore.", ephemeral=True)
-            return
-        view = ListOrePageView(self.owner_id, ore, stacks)
-        await interaction.response.send_message(embed=view.page_embed(), view=view, ephemeral=True)
-
-
-class ListStackSelect(discord.ui.Select):
-    """Level 2: choose which quality stack of the ore to list."""
-
-    def __init__(self, owner_id: int, stacks: list[dict]):
-        self.owner_id = owner_id
-        options = []
-        for s in stacks[:25]:
-            label = f"{s['ore']} ({s['quality']}) x{s['count']}"[:100]
-            desc = f"{config.tier_name(s['rarity'])} • quicksell ${config.quicksell_value(s['rarity']):,} each"[:100]
-            options.append(discord.SelectOption(label=label, description=desc,
-                                                value=f"{s['rarity']}|{s['quality']}"))
-        super().__init__(placeholder="Choose which stack to list…", options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.owner_id:
             await interaction.response.send_message("That's not yours!", ephemeral=True)
             return
-        self.view.selected = self.values[0]
-        self.options = [
-            discord.SelectOption(label=f"{s['ore']} ({s['quality']}) x{s['count']}"[:100],
-                                 description=f"{config.tier_name(s['rarity'])} • quicksell ${config.quicksell_value(s['rarity']):,} each"[:100],
-                                 value=f"{s['rarity']}|{s['quality']}",
-                                 default=(f"{s['rarity']}|{s['quality']}" == self.values[0]))
-            for s in self.view.stacks[:25]
-        ]
-        await interaction.response.edit_message(embed=self.view.page_embed(), view=self.view)
+        uid = SUID(interaction, self.owner_id)
+        targets = _scope_targets(uid, "inv", self.ore, self.quality, self.tier)
+        total = sum(t["count"] for t in targets)
+        if total <= 0:
+            await interaction.response.send_message("❌ Nothing to list.", ephemeral=True)
+            return
+        raw = str(self.amount.value).strip().lower()
+        if raw in ("all", "max"):
+            n = total
+        else:
+            try:
+                n = int(raw)
+            except ValueError:
+                await interaction.response.send_message("❌ Type a number or ALL.", ephemeral=True)
+                return
+        n = max(1, min(n, total))
+        await interaction.response.send_modal(
+            ListPriceModal(self.owner_id, self.ore, self.quality, self.tier, n,
+                           bview=self.bview, browser_message=self.browser_message))
 
 
-class ListOrePageView(discord.ui.View):
-    """Ore page for listing: quality dropdown + List this button."""
+class ListPriceModal(discord.ui.Modal, title="List — price each?"):
+    price = discord.ui.TextInput(label="Price per ore ($)", placeholder="e.g. 500", max_length=12)
 
-    def __init__(self, owner_id: int, ore: str, stacks: list[dict]):
-        super().__init__(timeout=180)
+    def __init__(self, owner_id: int, ore: str | None, quality: str | None, tier: str | None,
+                 amount: int, bview=None, browser_message=None):
+        super().__init__()
         self.owner_id = owner_id
         self.ore = ore
-        self.stacks = stacks
-        self.selected = f"{stacks[0]['rarity']}|{stacks[0]['quality']}"
-        self.add_item(ListStackSelect(owner_id, stacks))
+        self.quality = quality
+        self.tier = tier
+        self.amount = amount
+        self.bview = bview
+        self.browser_message = browser_message
 
-    def page_embed(self) -> discord.Embed:
-        lines = []
-        for s in self.stacks:
-            mark = "▶ " if f"{s['rarity']}|{s['quality']}" == self.selected else ""
-            lines.append(f"{mark}**{s['ore']} ({s['quality']})** x{s['count']}")
-        return discord.Embed(title=f"📦 List: {self.ore}", description="\n".join(lines),
-                             color=0x4CAF50)
-
-    @discord.ui.button(label="List this", style=discord.ButtonStyle.green, emoji="📋")
-    async def list_this(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def on_submit(self, interaction: discord.Interaction):
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message("That's not yours!", ephemeral=True)
             return
-        rarity, quality = self.selected.split("|")
-        await interaction.response.send_modal(MarketPriceModal(self.owner_id, rarity, quality, self.ore))
+        try:
+            price = int(str(self.price.value).replace(",", "").replace("$", "").strip())
+        except ValueError:
+            await interaction.response.send_message("❌ Price must be a whole number.", ephemeral=True)
+            return
+        if price < 1:
+            await interaction.response.send_message("❌ Price must be at least $1.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        uid = SUID(interaction, self.owner_id)
+        gid = guild_scope(interaction)
+        targets = _scope_targets(uid, "inv", self.ore, self.quality, self.tier)
+        made, remaining = 0, self.amount
+        for t in targets:
+            if remaining <= 0:
+                break
+            want = min(t["count"], remaining)
+            got = db.remove_many_items(uid, t["rarity"], t["quality"], t["ore"], want)
+            for _ in range(got):
+                db.market_list(gid, uid, t["rarity"], t["quality"], t["ore"], price)
+            made += got
+            remaining -= got
+        sync_collectors(uid)
+        if self.bview is not None and self.browser_message is not None:
+            try:
+                v = self.bview
+                fresh = InvBrowser(v.viewer_id, v.target_id, v.target_name, v.public,
+                                   source=v.source, quality=v.quality, ore=v.ore, tier=v.tier,
+                                   guild=v.guild, recip_id=v.recip_id, recip_name=v.recip_name,
+                                   trade_tid=v.trade_tid, trade_side=v.trade_side)
+                await self.browser_message.edit(embed=fresh.render(), view=fresh)
+            except Exception:
+                pass
+        await interaction.followup.send(
+            f"📦 Listed **{made}x** for **${price:,}** each!", ephemeral=True)
 
 
-class MarketSellView(discord.ui.View):
-    def __init__(self, owner_id: int, ores: list[dict]):
-        super().__init__(timeout=180)
-        self.owner_id = owner_id
-        self.ores = ores
-        self.tier = None
-        self.add_item(MarketSellTierSelect(owner_id))
-        if ores:
-            self.add_item(MarketSellSelect(owner_id, ores))
-
-    def make_embed(self) -> discord.Embed:
-        ores = self.ores
-        if self.tier:
-            ores = [o for o in ores if self.tier in o["rarities"]]
-        desc = "\n".join(f"**{ore_tier_label(o['ore'], o['rarities'])}** x{o['count']}"
-                         for o in ores[:25]) or "Nothing in this tier!"
-        title = "📦 List an ore" + (f" — {config.tier_name(self.tier)}" if self.tier else "")
-        return discord.Embed(title=title, description=desc, color=0x4CAF50)
-
-    def refresh_ores(self):
-        for child in self.children:
-            if isinstance(child, MarketSellSelect):
-                self.remove_item(child)
-        self.add_item(MarketSellSelect(self.owner_id, self.ores, self.tier))
 
 
-@bot.tree.command(name="market_list", description="List one of your ores on the player market (pick from dropdown).")
+@bot.tree.command(name="market_list", description="List your ores (pick + amount + price).")
 async def market_list(interaction: discord.Interaction):
     uid = SUID(interaction)
-    ores = db.get_ores_overview(uid)
-    if not ores:
-        await interaction.response.send_message("🎒 Your inventory is empty! Use `/spin` first.", ephemeral=True)
+    if db.count_inventory(uid) == 0:
+        await interaction.response.send_message("🎒 Your inventory is empty! Use `/spin` first.",
+                                                ephemeral=True)
         return
-    # lowest tier first
-    ores.sort(key=lambda o: (min(config.tier_index(r) for r in o["rarities"]), -o["count"]))
-    desc = "\n".join(f"**{ore_tier_label(o['ore'], o['rarities'])}** x{o['count']}"
-                     for o in ores[:25])
-    embed = discord.Embed(title="📦 List an ore", description=desc, color=0x4CAF50)
-    await interaction.response.send_message(
-        embed=embed, view=MarketSellView(interaction.user.id, ores), ephemeral=True)
+    view = InvBrowser(interaction.user.id, interaction.user.id,
+                      interaction.user.display_name, False, source="list",
+                      guild=guild_scope(interaction))
+    await interaction.response.send_message(embed=view.render(), view=view, ephemeral=True)
 
 
 PAGE_SIZE = 10
@@ -1521,7 +1472,7 @@ async def format_listings(interaction: discord.Interaction, listings: list[dict]
     lines = []
     for l in listings:
         seller = await seller_name(interaction, l["seller_id"])
-        lines.append(f"`{l['id']}` **{l['ore']}** ({config.tier_name(l['rarity'])}) — **${l['price']:,}** — {seller}")
+        lines.append(f"`{l['id']}` **{l['ore']}** — **${l['price']:,}** — {seller}")
     return lines
 
 
@@ -1570,10 +1521,18 @@ class MarketTierSelect(discord.ui.Select):
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message("Use `/market_view` to browse yourself!", ephemeral=True)
             return
-        tier = None if self.values[0] == "all" else self.values[0]
-        # changing tier resets ore (ore may not exist in that tier)
-        embed, view = await render_market(self.owner_id, interaction, tier=tier)
-        await interaction.response.edit_message(embed=embed, view=view)
+        view = self.view
+        view.tier = None if self.values[0] == "all" else self.values[0]
+        # changing tier resets ore (ore may not exist in that tier); quality stays
+        if view.ore and view.tier:
+            ores = db.market_ores_with_rarity(view.guild)
+            match = next((o for o in ores if o["ore"] == view.ore), None)
+            if not match or view.tier not in match["rarities"]:
+                view.ore = None
+        embed, view2 = await render_market(view.owner_id, interaction, ore=view.ore,
+                                           quality=view.quality, sort=view.sort, page=0,
+                                           tier=view.tier)
+        await interaction.response.edit_message(embed=embed, view=view2)
 
 
 class MarketQualityTopSelect(discord.ui.Select):
@@ -1591,12 +1550,12 @@ class MarketQualityTopSelect(discord.ui.Select):
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message("Use `/market_view` to browse yourself!", ephemeral=True)
             return
-        if self.values[0] == "all":
-            embed, view = await render_market(self.owner_id, interaction, tier=self.tier)
-        else:
-            embed, view = await render_market(self.owner_id, interaction,
-                                              quality=self.values[0], tier=self.tier)
-        await interaction.response.edit_message(embed=embed, view=view)
+        view = self.view
+        view.quality = None if self.values[0] == "all" else self.values[0]
+        embed, view2 = await render_market(view.owner_id, interaction, ore=view.ore,
+                                           quality=view.quality, sort=view.sort, page=0,
+                                           tier=view.tier)
+        await interaction.response.edit_message(embed=embed, view=view2)
 
 
 class MarketOreFilterSelect(discord.ui.Select):
@@ -1610,9 +1569,8 @@ class MarketOreFilterSelect(discord.ui.Select):
         ores.sort(key=lambda o: min(config.tier_index(r) for r in o["rarities"]))
         options = [discord.SelectOption(label="All ores", value="all", default=(current is None))]
         for o in ores[:24]:
-            tiers = ", ".join(config.tier_name(r) for r in sorted(o["rarities"], key=config.tier_index))
             options.append(discord.SelectOption(
-                label=f"{o['ore']} ({tiers})"[:100], value=o["ore"],
+                label=f"{o['ore']}"[:100], value=o["ore"],
                 default=(o["ore"] == current)))
         super().__init__(placeholder="Filter by ore…", options=options or [
             discord.SelectOption(label="(no listings)", value="none")])
@@ -1623,12 +1581,21 @@ class MarketOreFilterSelect(discord.ui.Select):
             return
         if self.values[0] == "none":
             return
+        view = self.view
         if self.values[0] == "all":
-            embed, view = await render_market(self.owner_id, interaction, tier=self.tier)
+            view.ore = None
         else:
-            embed, view = await render_market(self.owner_id, interaction,
-                                              ore=self.values[0], tier=self.tier)
-        await interaction.response.edit_message(embed=embed, view=view)
+            view.ore = self.values[0]
+            view.quality = None  # reset quality (may not exist for the new ore)
+            # auto-match tier to the picked ore
+            ores = db.market_ores_with_rarity(view.guild)
+            match = next((o for o in ores if o["ore"] == view.ore), None)
+            if match and match["rarities"]:
+                view.tier = sorted(match["rarities"], key=config.tier_index)[0]
+        embed, view2 = await render_market(view.owner_id, interaction, ore=view.ore,
+                                           quality=view.quality, sort=view.sort, page=0,
+                                           tier=view.tier)
+        await interaction.response.edit_message(embed=embed, view=view2)
 
 
 class MarketQualitySelect(discord.ui.Select):
@@ -1653,10 +1620,12 @@ class MarketQualitySelect(discord.ui.Select):
             return
         if self.values[0] == "none":
             return
-        quality = None if self.values[0] == "all" else self.values[0]
-        embed, view = await render_market(self.owner_id, interaction,
-                                          ore=self.ore, quality=quality, tier=self.tier)
-        await interaction.response.edit_message(embed=embed, view=view)
+        view = self.view
+        view.quality = None if self.values[0] == "all" else self.values[0]
+        embed, view2 = await render_market(view.owner_id, interaction,
+                                           ore=view.ore, quality=view.quality,
+                                           sort=view.sort, page=0, tier=view.tier)
+        await interaction.response.edit_message(embed=embed, view=view2)
 
 
 class MarketQualityFilterSelect(discord.ui.Select):
@@ -1704,10 +1673,12 @@ class MarketSortSelect(discord.ui.Select):
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message("Use `/market_view` to browse yourself!", ephemeral=True)
             return
-        embed, view = await render_market(self.owner_id, interaction, ore=self.ore,
-                                          quality=self.quality, sort=self.values[0], page=0,
-                                          tier=self.tier)
-        await interaction.response.edit_message(embed=embed, view=view)
+        view = self.view
+        view.sort = self.values[0]
+        embed, view2 = await render_market(view.owner_id, interaction, ore=view.ore,
+                                           quality=view.quality, sort=view.sort, page=0,
+                                           tier=view.tier)
+        await interaction.response.edit_message(embed=embed, view=view2)
 
 
 class MarketListingInspectSelect(discord.ui.Select):
@@ -1736,98 +1707,135 @@ class MarketListingInspectSelect(discord.ui.Select):
         r_chance = config.RARITIES[listing["rarity"]]["chance"]
         q_chance = config.QUALITIES[listing["quality"]]["chance"]
         embed = discord.Embed(
-            title=f"{listing['ore']} ({config.tier_name(listing['rarity'])}) — ${listing['price']:,}",
+            title=f"{listing['ore']} — ${listing['price']:,}",
             description=f"Quality: **{listing['quality']}** — {q_chance:g}% (1 in {config.rarity_one_in(q_chance)} chance)\n"
                         f"Seller: **{seller}**\n"
                         f"Tier: **{config.tier_name(listing['rarity'])}** — {r_chance:g}% (1 in {config.rarity_one_in(r_chance)} chance)\n"
                         f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
                         f"Quicksell value: **${quick:,}**",
             color=0x9C27B0)
-        view = ListingInspectView(interaction.user.id, listing["id"])
+        view = ListingInspectView(interaction.user.id, listing)
         # public inspect (not private) so anyone can see + buy
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+
+
+class BuyAmountModal(discord.ui.Modal, title="Buy — how many?"):
+    amount = discord.ui.TextInput(label="How many? (number or ALL)", placeholder="e.g. 2 or ALL",
+                                  max_length=8)
+
+    def __init__(self, buyer_id: int, ore: str, quality: str, unit_price: int):
+        super().__init__()
+        self.buyer_id = buyer_id
+        self.ore = ore
+        self.quality = quality
+        self.unit_price = unit_price
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.user.id != self.buyer_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        raw = str(self.amount.value).strip().lower()
+        gid = guild_scope(interaction)
+        buyer = SUID(interaction, self.buyer_id)
+        if raw in ("all", "max"):
+            # how many can they afford at cheapest-first prices
+            cands = db.market_browse(gid, ore=self.ore, quality=self.quality,
+                                     sort="cheapest", limit=1000)
+            cands = [l for l in cands if l["seller_id"] != buyer]
+            running, n = 0, 0
+            bu = db.get_user(buyer)
+            for l in cands:
+                if running + l["price"] > bu["balance"]:
+                    break
+                running += l["price"]
+                n += 1
+            n = max(n, 0)
+        else:
+            try:
+                n = int(raw)
+            except ValueError:
+                await interaction.followup.send("❌ Type a number or ALL.", ephemeral=True)
+                return
+            n = max(0, n)
+        if n <= 0:
+            await interaction.followup.send("❌ Nothing to buy.", ephemeral=True)
+            return
+        bought = db.market_buy_many(gid, buyer, self.ore, self.quality, n)
+        if bought is None:
+            await interaction.followup.send("❌ Not enough money for that many.", ephemeral=True)
+            return
+        rows, total = bought
+        if not rows:
+            await interaction.followup.send("❌ Those just sold out!", ephemeral=True)
+            return
+        # seller side: merchant/supplier + silent checks + aggregated mail
+        from collections import defaultdict
+        per_seller = defaultdict(lambda: [0, 0])
+        for l in rows:
+            db.grant_achievement(l["seller_id"], "merchant")
+            if l["rarity"] == "DIH":
+                db.grant_achievement(l["seller_id"], "supplier")
+            check_achievements(l["seller_id"], db.get_user(l["seller_id"]), "", "")
+            per_seller[l["seller_id"]][0] += 1
+            per_seller[l["seller_id"]][1] += l["price"]
+        buyer_name = await display_name(interaction, buyer)
+        for sid, (cnt, sub) in per_seller.items():
+            db.add_mail(sid, f"💰 **{buyer_name}** bought **{cnt}x {self.ore} ({self.quality})** "
+                             f"from you for **${sub:,}**!")
+        # buyer side: counters + achievements
+        bu = db.get_user(buyer)
+        ups = {}
+        if any(l["rarity"] == "DIH" for l in rows):
+            ups["dih_pulls"] = bu.get("dih_pulls", 0) + sum(1 for l in rows if l["rarity"] == "DIH")
+        if any(l["quality"] == "Perfect" for l in rows):
+            ups["perfect_pulls"] = bu.get("perfect_pulls", 0) + sum(1 for l in rows if l["quality"] == "Perfect")
+        if ups:
+            db.update_user(buyer, **ups)
+        db.grant_achievement(buyer, "customer")
+        r0 = rows[0]
+        newly = check_achievements(buyer, db.get_user(buyer), r0["rarity"], r0["quality"])
+        if any(l["rarity"] == "DIH" for l in rows) and db.grant_achievement(buyer, "investor"):
+            newly.append(f"🏆 **{config.ACHIEVEMENTS['investor'][0]}** — {config.ACHIEVEMENTS['investor'][1]}")
+        # rarest buy tracking
+        try:
+            qualities = list(config.QUALITIES.keys())
+            best = max(rows, key=lambda l: (config.tier_index(l["rarity"]),
+                                            qualities.index(l["quality"])))
+            bu2 = db.get_user(buyer)
+            cur = parse_best(bu2.get("rarest_buy", ""))
+            cur_idx = (config.tier_index(cur[0]), qualities.index(cur[1])) if cur else (-1, -1)
+            new_idx = (config.tier_index(best["rarity"]), qualities.index(best["quality"]))
+            if new_idx > cur_idx:
+                db.update_user(buyer, rarest_buy=f"{best['rarity']}|{best['quality']}|{best['ore']}")
+        except Exception:
+            pass
+        msg = await interaction.followup.send(
+            f"✅ {interaction.user.mention} bought **{len(rows)}x {self.ore} ({self.quality})** "
+            f"for **${total:,}**!")
+        if newly:
+            await achievement_reply(interaction, interaction.user.mention, newly,
+                                    ref_message=msg)
 
 
 class ListingInspectView(discord.ui.View):
     """Buy button for one inspected listing. Bound to whoever opened it."""
 
-    def __init__(self, buyer_id: int, listing_id: int):
+    def __init__(self, buyer_id: int, listing: dict):
         super().__init__(timeout=300)
         self.buyer_id = buyer_id
-        self.listing_id = listing_id
+        self.listing_id = listing["id"]
+        self.ore = listing["ore"]
+        self.quality = listing["quality"]
+        self.unit_price = listing["price"]
 
     @discord.ui.button(label="Buy", style=discord.ButtonStyle.green, emoji="🛒")
     async def buy(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.buyer_id:
             await interaction.response.send_message("Inspect it yourself to buy it!", ephemeral=True)
             return
-        await execute_buy(interaction, self.buyer_id, self.listing_id)
-        button.disabled = True
-        try:
-            await interaction.message.edit(view=self)
-        except Exception:
-            pass
-
-
-async def execute_buy(interaction: discord.Interaction, buyer_id: int, listing_id: int):
-    """Shared buy flow (was /market_buy). Sends its own responses."""
-    gid = guild_scope(interaction)
-    buyer = SUID(interaction, buyer_id)
-    listing = db.market_get(listing_id, gid)
-    if listing is None:
-        await interaction.response.send_message("❌ That listing just sold!", ephemeral=True)
-        return
-    if listing["seller_id"] == buyer:
-        await interaction.response.send_message("❌ You can't buy your own listing.", ephemeral=True)
-        return
-    u = db.get_user(buyer)
-    if u["balance"] < listing["price"]:
-        await interaction.response.send_message(
-            f"❌ You need ${listing['price']:,} but only have ${u['balance']:,}.", ephemeral=True)
-        return
-    ok, msg = db.market_buy(listing_id, buyer, gid)
-    if not ok:
-        await interaction.response.send_message(f"❌ {msg}", ephemeral=True)
-        return
-    # market obtains count toward obtain achievements too
-    bu0 = db.get_user(buyer)
-    bumps = {}
-    if listing["rarity"] == "DIH":
-        bumps["dih_pulls"] = bu0.get("dih_pulls", 0) + 1
-    if listing["quality"] == "Perfect":
-        bumps["perfect_pulls"] = bu0.get("perfect_pulls", 0) + 1
-    if bumps:
-        db.update_user(buyer, **bumps)
-    # seller side: merchant + supplier + silent money tiers + mail + collector recheck
-    db.grant_achievement(listing["seller_id"], "merchant")
-    if listing["rarity"] == "DIH":
-        db.grant_achievement(listing["seller_id"], "supplier")
-    check_achievements(listing["seller_id"], db.get_user(listing["seller_id"]), "", "")  # silent
-    sync_collectors(listing["seller_id"])
-    buyer_name = await display_name(interaction, buyer)
-    db.add_mail(listing["seller_id"],
-                f"💰 **{buyer_name}** bought your **{listing['ore']} ({listing['quality']})** "
-                f"for **${listing['price']:,}**!")
-    # buyer side: rarest buy tracking (global best, kept even if sold)
-    bu = db.get_user(buyer)
-    try:
-        qualities = list(config.QUALITIES.keys())
-        new_idx = (config.tier_index(listing["rarity"]), qualities.index(listing["quality"]))
-        cur = parse_best(bu.get("rarest_buy", ""))
-        cur_idx = (config.tier_index(cur[0]), qualities.index(cur[1])) if cur else (-1, -1)
-        if new_idx > cur_idx:
-            db.update_user(buyer, rarest_buy=f"{listing['rarity']}|{listing['quality']}|{listing['ore']}")
-    except Exception:
-        pass
-    db.grant_achievement(buyer, "customer")
-    newly = check_achievements(buyer, db.get_user(buyer), listing["rarity"], listing["quality"])
-    if listing["rarity"] == "DIH" and db.grant_achievement(buyer, "investor"):
-        newly.append(f"🏆 **{config.ACHIEVEMENTS['investor'][0]}** — {config.ACHIEVEMENTS['investor'][1]}")
-    await interaction.response.send_message(
-        f"✅ {interaction.user.mention} bought **{listing['quality']} {listing['ore']}** "
-        f"({config.tier_name(listing['rarity'])}) for **${listing['price']:,}**!")
-    if newly:
-        await achievement_reply(interaction, interaction.user.mention, newly)
+        await interaction.response.send_modal(
+            BuyAmountModal(self.buyer_id, self.ore, self.quality, self.unit_price))
 
 
 class MarketBrowser(discord.ui.View):
@@ -1851,8 +1859,7 @@ class MarketBrowser(discord.ui.View):
         self.add_item(MarketQualitySelect(owner_id, guild, ore=ore, current=quality, tier=tier))
         self.add_item(MarketSortSelect(owner_id, ore, quality, sort, tier=tier))
         if self.chunk:
-            ready = bool(tier and ore and quality)
-            self.add_item(self._inspect_btn(disabled=not ready))
+            self.add_item(self._inspect_btn(disabled=False))
 
     def _inspect_btn(self, disabled: bool = False):
         view = self
@@ -3269,10 +3276,10 @@ class ScopeGiftModal(discord.ui.Modal, title="Gift — how many?"):
                 newly2 += check_achievements(r, db.get_user(r), r, q, collectors=first2)
                 first2 = False
         recip_name = await display_name(interaction, r)
-        await interaction.followup.send(
+        result_msg = await interaction.followup.send(
             f"🎁 Gifted **{moved}x** {what} to **{recip_name}**!", ephemeral=True)
         if newly2:
-            await achievement_reply(interaction, f"<@{r}>", newly2)
+            await achievement_reply(interaction, f"<@{r}>", newly2, ref_message=result_msg)
 
 
 gift_group = app_commands.Group(name="gift", description="Gift ores or money.")
