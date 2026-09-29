@@ -90,13 +90,13 @@ def time_until_reset() -> str:
 def check_achievements(user_id: str, u: dict, rarity: str, quality: str,
                        collectors: bool = True, pulled: bool = False) -> list[str]:
     """Grant eligible achievements. Returns list of newly unlocked names.
-    collectors=False skips the (expensive) collector scan — spin passes it once.
-    pulled=True only for actual /spin pulls — Pull achievements never fire otherwise."""
+    collectors=False skips the (expensive) collector scan - spin passes it once.
+    pulled=True only for actual /spin pulls - Pull achievements never fire otherwise."""
     newly = []
 
     def grant(aid: str):
         if db.grant_achievement(user_id, aid):
-            newly.append(f"🏆 **{config.ACHIEVEMENTS[aid][0]}** — {config.ACHIEVEMENTS[aid][1]}")
+            newly.append(f"🏆 **{config.ACHIEVEMENTS[aid][0]}** - {config.ACHIEVEMENTS[aid][1]}")
 
     ts = u["total_spins"]
     if ts >= 1:
@@ -198,7 +198,7 @@ def current_collectors(user_id: str) -> set[str]:
 
 
 def sync_collectors(user_id: str) -> list[str]:
-    """Achievements can no longer be lost — this is intentionally a no-op.
+    """Achievements can no longer be lost - this is intentionally a no-op.
     (Kept so all existing call sites keep working.)"""
     return []
 
@@ -212,7 +212,7 @@ def format_achievements(newly: list[str]) -> str:
         return full
     names = []
     for line in newly:
-        # line looks like "🏆 **Name** — desc" -> keep just Name
+        # line looks like "🏆 **Name** - desc" -> keep just Name
         m = line.split("**")
         names.append(m[1] if len(m) > 1 else line)
     return f"🏆 Achievements unlocked ({len(newly)}): " + ", ".join(f"**{n}**" for n in names)
@@ -346,8 +346,8 @@ async def inspect_text(interaction: discord.Interaction, uid: str, rarity: str, 
         origin_block = "\n".join(parts) + "\n" if parts else ""
     return (
         f"**{ore} ({quality}) x{count}**\n"
-        f"Tier: **{config.tier_name(rarity)}** — {r_chance:g}% (1 in {config.rarity_one_in(r_chance)} chance)\n"
-        f"Quality: **{quality}** — {q_chance:g}% (1 in {config.rarity_one_in(q_chance)} chance)\n"
+        f"Tier: **{config.tier_name(rarity)}** - {r_chance:g}% (1 in {config.rarity_one_in(r_chance)} chance)\n"
+        f"Quality: **{quality}** - {q_chance:g}% (1 in {config.rarity_one_in(q_chance)} chance)\n"
         f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
         f"Quicksell: **${value_each:,}** each (**${value_each * count:,}** for all)\n"
         f"{origin_block}"
@@ -441,7 +441,7 @@ class ScopeQuicksellModal(discord.ui.Modal, title="Quicksell"):
                                     ref_message=result_msg)
 
 
-class ScopeVaultModal(discord.ui.Modal, title="Vault — how many?"):
+class ScopeVaultModal(discord.ui.Modal, title="Vault - how many?"):
     """Moves up to N (or ALL) of the current scope into the vault. Origins preserved."""
 
     amount = discord.ui.TextInput(label="How many? (number or ALL)", placeholder="e.g. 5 or ALL",
@@ -513,7 +513,7 @@ class ScopeVaultModal(discord.ui.Modal, title="Vault — how many?"):
             f"🗝️ Stored **{moved}** ore(s) in your vault!", ephemeral=True)
 
 
-class ScopeUnvaultModal(discord.ui.Modal, title="Un-vault — how many?"):
+class ScopeUnvaultModal(discord.ui.Modal, title="Un-vault - how many?"):
     amount = discord.ui.TextInput(label="How many? (number or ALL)", placeholder="e.g. 5 or ALL",
                                   max_length=8)
 
@@ -709,7 +709,7 @@ class InvBrowser(discord.ui.View):
     """Unified inventory/vault browser. One message for everything.
 
     source='inv': Quicksell + Vault buttons (own only), shown whenever scoped
-      (ore picked and/or quality picked) — hidden for all/all.
+      (ore picked and/or quality picked) - hidden for all/all.
     source='vault': Un-vault button, same rule. Plus vault has its own quality filter.
     """
 
@@ -809,9 +809,9 @@ class InvBrowser(discord.ui.View):
             title = f"{icon} {self.target_name}'s {what} ({n} ores) (${v:,})"
             desc = "\n".join(f"**{o['ore']}** x{o['count']}" for o in ores[:25]) or "Empty!"
         if self.quality:
-            title += f" — {self.quality} only"
+            title += f" - {self.quality} only"
         if self.tier:
-            title += f" — {config.tier_name(self.tier)}"
+            title += f" - {config.tier_name(self.tier)}"
         if len(ores) > 25 and not self.ore:
             desc += f"\n-# Showing 25 of {len(ores)} ores."
         self._rebuild(ores, stacks)
@@ -868,7 +868,7 @@ class InvBrowser(discord.ui.View):
                                    stacks, view.public, guild=view.guild,
                                    inv=view._data_inv())
             await interaction.response.send_message(
-                content=f"🔍 Inspect — pick a stack ({len(stacks)} shown):",
+                content=f"🔍 Inspect - pick a stack ({len(stacks)} shown):",
                 view=pop, ephemeral=True)
         btn = discord.ui.Button(label="Inspect", style=discord.ButtonStyle.secondary, emoji="🔍")
         btn.callback = cb
@@ -989,8 +989,8 @@ def vault_inspect_text(uid: str, rarity: str, quality: str, ore: str, count: int
     origin_line = f"🛒 {market_n}x bought on the player market\n" if market_n else ""
     return (
         f"**{ore} ({quality}) x{count}**\n"
-        f"Tier: **{config.tier_name(rarity)}** — {r_chance:g}% (1 in {config.rarity_one_in(r_chance)} chance)\n"
-        f"Quality: **{quality}** — {q_chance:g}% (1 in {config.rarity_one_in(q_chance)} chance)\n"
+        f"Tier: **{config.tier_name(rarity)}** - {r_chance:g}% (1 in {config.rarity_one_in(r_chance)} chance)\n"
+        f"Quality: **{quality}** - {q_chance:g}% (1 in {config.rarity_one_in(q_chance)} chance)\n"
         f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
         f"Quicksell value: **${value_each:,}** each (**${value_each * count:,}** total)\n"
         f"{origin_line}"
@@ -1029,7 +1029,7 @@ async def on_ready():
         await bot.tree.sync()
     except Exception as e:
         print(f"Slash sync failed: {e}")
-    print(f"Logged in as {bot.user} — /spin ready!" + (" [UNLIMITED SPINS TEST MODE]" if UNLIMITED_SPINS else ""))
+    print(f"Logged in as {bot.user} - /spin ready!" + (" [UNLIMITED SPINS TEST MODE]" if UNLIMITED_SPINS else ""))
     await restore_trades()
 
 
@@ -1083,7 +1083,7 @@ def _run_spin_batch(uid: str, n: int):
     db.update_user(uid, **updates)
     u = db.update_streak(uid, user_today(uid))
     u = db.get_user(uid)
-    # rarest spin ever (global best, kept even if sold — stored as rarity|quality|ore)
+    # rarest spin ever (global best, kept even if sold - stored as rarity|quality|ore)
     try:
         qualities = list(config.QUALITIES.keys())
         best_pull = max(pulls, key=lambda p: (config.tier_index(p[0]), qualities.index(p[1])))
@@ -1126,7 +1126,7 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
             await interaction.followup.send(
                 f"❌ You're out of spins! You get **{spins_per_day}** per day.\n"
                 f"⏳ Resets in **{user_time_until_reset(uid)}**.\n"
-                f"🔥 Streak: **{u['streak']}** day(s) — spin daily to keep it!"
+                f"🔥 Streak: **{u['streak']}** day(s) - spin daily to keep it!"
             )
             return
         n = min(amount, remaining)
@@ -1168,9 +1168,9 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
         embed = discord.Embed(title=f"🎰 x{n} spins!", color=0x9E9E9E)
         embed.add_field(
             name="⭐ Best pull",
-            value=f"**{best[2]} ({best[1]})** — {config.tier_name(best[0])} {config.RARITIES[best[0]]['dot']}",
+            value=f"**{best[2]} ({best[1]})** - {config.tier_name(best[0])} {config.RARITIES[best[0]]['dot']}",
             inline=False)
-        embed.add_field(name="📦 Haul", value="\n".join(lines) if lines else "—", inline=True)
+        embed.add_field(name="📦 Haul", value="\n".join(lines) if lines else "-", inline=True)
         embed.add_field(name="💰 Haul quicksell value", value=f"${haul_value:,}", inline=True)
         embed.add_field(name="🎰 Spins left today", value=spins_left_text, inline=True)
         embed.set_footer(text=f"🔥 {u['streak']}-day streak • {interaction.user.display_name}")
@@ -1363,7 +1363,7 @@ async def quicksell_all(interaction: discord.Interaction):
 
 # ---------- market listing (amount first, then price) ----------
 
-class ListAmountModal(discord.ui.Modal, title="List — how many?"):
+class ListAmountModal(discord.ui.Modal, title="List - how many?"):
     amount = discord.ui.TextInput(label="How many to list? (number or ALL)",
                                   placeholder="e.g. 3 or ALL", max_length=8)
 
@@ -1402,7 +1402,7 @@ class ListAmountModal(discord.ui.Modal, title="List — how many?"):
                            bview=self.bview, browser_message=self.browser_message))
 
 
-class ListPriceModal(discord.ui.Modal, title="List — price each?"):
+class ListPriceModal(discord.ui.Modal, title="List - price each?"):
     price = discord.ui.TextInput(label="Price per ore ($)", placeholder="e.g. 500", max_length=12)
 
     def __init__(self, owner_id: int, ore: str | None, quality: str | None, tier: str | None,
@@ -1477,7 +1477,7 @@ BROWSE_LIMIT = 50  # per stage; pages flip through these 10 at a time
 
 
 async def seller_name(interaction: discord.Interaction, seller_id: str) -> str:
-    """Seller display name — Anonymous unless they've set market listings public."""
+    """Seller display name - Anonymous unless they've set market listings public."""
     try:
         if not db.get_user(seller_id).get("market_public", 0):
             return "Anonymous"
@@ -1490,7 +1490,7 @@ async def format_listings(interaction: discord.Interaction, listings: list[dict]
     lines = []
     for l in listings:
         seller = await seller_name(interaction, l["seller_id"])
-        lines.append(f"`{l['id']}` **{l['ore']}** — **${l['price']:,}** — {seller}")
+        lines.append(f"`{l['id']}` **{l['ore']}** - **${l['price']:,}** - {seller}")
     return lines
 
 
@@ -1505,16 +1505,16 @@ async def render_market(owner_id: int, interaction: discord.Interaction,
     page = page % pages
     chunk = all_listings[page * PAGE_SIZE:page * PAGE_SIZE + PAGE_SIZE]
     lines = await format_listings(interaction, chunk)
-    scope = " — ".join(x for x in (
+    scope = " - ".join(x for x in (
         f"{ore}" if ore else None,
         f"({quality})" if quality else None,
         config.tier_name(tier) if tier else None) if x)
     if not sort or sort == "new":
-        title = f"🏪 {scope + ' — ' if scope else ''}latest"
+        title = f"🏪 {scope + ' - ' if scope else ''}latest"
     else:
         label = {"cheapest": "cheapest", "average": "closest to average",
                  "expensive": "most expensive"}[sort]
-        title = f"🏪 {scope + ' — ' if scope else ''}{label}"
+        title = f"🏪 {scope + ' - ' if scope else ''}{label}"
     if pages > 1:
         title += f" (page {page + 1}/{pages})"
     embed = discord.Embed(title=title, description="\n".join(lines) if lines else "Sold out!",
@@ -1705,7 +1705,7 @@ class MarketListingInspectSelect(discord.ui.Select):
     def __init__(self, listings: list[dict]):
         options = []
         for l in listings[:25]:
-            label = f"{l['ore']} — ${l['price']:,}"[:100]
+            label = f"{l['ore']} - ${l['price']:,}"[:100]
             desc = f"{l['quality']} • {config.tier_name(l['rarity'])} • ID {l['id']}"[:100]
             options.append(discord.SelectOption(label=label, description=desc,
                                                 value=str(l["id"])))
@@ -1725,10 +1725,10 @@ class MarketListingInspectSelect(discord.ui.Select):
         r_chance = config.RARITIES[listing["rarity"]]["chance"]
         q_chance = config.QUALITIES[listing["quality"]]["chance"]
         embed = discord.Embed(
-            title=f"{listing['ore']} — ${listing['price']:,}",
-            description=f"Quality: **{listing['quality']}** — {q_chance:g}% (1 in {config.rarity_one_in(q_chance)} chance)\n"
+            title=f"{listing['ore']} - ${listing['price']:,}",
+            description=f"Quality: **{listing['quality']}** - {q_chance:g}% (1 in {config.rarity_one_in(q_chance)} chance)\n"
                         f"Seller: **{seller}**\n"
-                        f"Tier: **{config.tier_name(listing['rarity'])}** — {r_chance:g}% (1 in {config.rarity_one_in(r_chance)} chance)\n"
+                        f"Tier: **{config.tier_name(listing['rarity'])}** - {r_chance:g}% (1 in {config.rarity_one_in(r_chance)} chance)\n"
                         f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
                         f"Quicksell value: **${quick:,}**",
             color=0x9C27B0)
@@ -1737,7 +1737,7 @@ class MarketListingInspectSelect(discord.ui.Select):
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
 
 
-class BuyAmountModal(discord.ui.Modal, title="Buy — how many?"):
+class BuyAmountModal(discord.ui.Modal, title="Buy - how many?"):
     amount = discord.ui.TextInput(label="How many? (number or ALL)", placeholder="e.g. 2 or ALL",
                                   max_length=8)
 
@@ -1814,7 +1814,7 @@ class BuyAmountModal(discord.ui.Modal, title="Buy — how many?"):
         r0 = rows[0]
         newly = check_achievements(buyer, db.get_user(buyer), r0["rarity"], r0["quality"])
         if any(l["rarity"] == "DIH" for l in rows) and db.grant_achievement(buyer, "investor"):
-            newly.append(f"🏆 **{config.ACHIEVEMENTS['investor'][0]}** — {config.ACHIEVEMENTS['investor'][1]}")
+            newly.append(f"🏆 **{config.ACHIEVEMENTS['investor'][0]}** - {config.ACHIEVEMENTS['investor'][1]}")
         # rarest buy tracking
         try:
             qualities = list(config.QUALITIES.keys())
@@ -1886,7 +1886,7 @@ class MarketBrowser(discord.ui.View):
             pop = discord.ui.View(timeout=180)
             pop.add_item(MarketListingInspectSelect(view.chunk))
             await interaction.response.send_message(
-                content=f"🔍 Inspect — pick a listing ({len(view.chunk)} shown):",
+                content=f"🔍 Inspect - pick a listing ({len(view.chunk)} shown):",
                 view=pop, ephemeral=True)
         btn = discord.ui.Button(label="Inspect", style=discord.ButtonStyle.secondary, emoji="🔍",
                                 disabled=disabled)
@@ -1941,14 +1941,14 @@ async def market_cancel_all(interaction: discord.Interaction):
         await interaction.response.send_message("📭 You have no listings!", ephemeral=True)
     else:
         await interaction.response.send_message(
-            f"🚫 Cancelled **{n}** listing(s) — items returned to your inventory.", ephemeral=True)
+            f"🚫 Cancelled **{n}** listing(s) - items returned to your inventory.", ephemeral=True)
 
 
 def cancel_lines(listings: list[dict], selected_id: int | None = None) -> list[str]:
     lines = []
     for l in listings:
         mark = "▶ " if l["id"] == selected_id else ""
-        lines.append(f"{mark}`{l['id']}` **{l['ore']} ({l['quality']})** — **${l['price']:,}**")
+        lines.append(f"{mark}`{l['id']}` **{l['ore']} ({l['quality']})** - **${l['price']:,}**")
     return lines
 
 
@@ -1963,13 +1963,13 @@ def render_cancel(scope_uid: str, ore: str | None, quality: str | None,
         ore, quality, selected_id, tier = None, None, None, None
         listings = db.market_by_seller(scope_uid, limit=10)
     if ore is None and tier is None:
-        title = "🚫 Your listings — latest 10"
+        title = "🚫 Your listings - latest 10"
     elif ore is None:
-        title = f"🚫 Your {config.tier_name(tier)} listings — latest 10"
+        title = f"🚫 Your {config.tier_name(tier)} listings - latest 10"
     elif quality is None:
-        title = f"🚫 Your {ore} — latest 10"
+        title = f"🚫 Your {ore} - latest 10"
     else:
-        title = f"🚫 Your {ore} ({quality}) — latest 10"
+        title = f"🚫 Your {ore} ({quality}) - latest 10"
     embed = discord.Embed(title=title, description="\n".join(cancel_lines(listings, selected_id))
                           if listings else "Nothing here!", color=0xF44336)
     return embed, CancelBrowser(int(scope_uid.split(":")[-1]), scope_uid, ore=ore, quality=quality,
@@ -2052,7 +2052,7 @@ class CancelListingSelect(discord.ui.Select):
         self.owner_id = owner_id
         options = []
         for l in listings[:25]:
-            label = f"{l['ore']} ({l['quality']}) — ${l['price']:,}"[:100]
+            label = f"{l['ore']} ({l['quality']}) - ${l['price']:,}"[:100]
             options.append(discord.SelectOption(label=label, description=f"ID {l['id']}",
                                                 value=str(l["id"])))
         super().__init__(placeholder="Choose one to cancel…", options=options or [
@@ -2277,8 +2277,8 @@ class AchievementsView(discord.ui.View):
 
     def make_embed(self) -> discord.Embed:
         chunk = self.items[self.page * self.PER_PAGE:(self.page + 1) * self.PER_PAGE]
-        filt = {"all": "", "done": " — completed", "todo": " — incomplete"}[self.filter]
-        lines = [f"{'✅' if aid in self.unlocked else '🔒'} **{name}** — {desc}"
+        filt = {"all": "", "done": " - completed", "todo": " - incomplete"}[self.filter]
+        lines = [f"{'✅' if aid in self.unlocked else '🔒'} **{name}** - {desc}"
                  for aid, (name, desc) in chunk]
         embed = discord.Embed(
             title=f"🏆 Achievements ({len(self.unlocked)}/{len(self.all_items)}){filt}",
@@ -2316,11 +2316,11 @@ async def odds(interaction: discord.Interaction):
         )
     q_lines = []
     for q, qi in config.QUALITIES.items():
-        q_lines.append(f"{qi['emoji']} **{q}** — {qi['chance']}%")
+        q_lines.append(f"{qi['emoji']} **{q}** - {qi['chance']}%")
     embed.add_field(name="✨ Qualities (rolled on every spin)", value="\n".join(q_lines), inline=False)
     embed.add_field(
         name="📊 How combo odds work",
-        value="rarity% × quality% — e.g. DIH Perfect = 0.1% × 1% = **0.001% (1 in 100,000)**",
+        value="rarity% × quality% - e.g. DIH Perfect = 0.1% × 1% = **0.001% (1 in 100,000)**",
         inline=False,
     )
     await interaction.response.send_message(embed=embed)
@@ -2452,14 +2452,14 @@ async def baltop(interaction: discord.Interaction):
     for i, row in enumerate(top):
         top_ids.add(row["user_id"])
         medal = medals[i] if i < 3 else f"`#{i+1}`"
-        lines.append(f"{medal} **{names[i]}** — **${row['balance']:,}** ({row['total_spins']} spins)")
+        lines.append(f"{medal} **{names[i]}** - **${row['balance']:,}** ({row['total_spins']} spins)")
     # If the caller isn't on the board, show their placement relative to everyone
     uid = SUID(interaction)
     if uid not in top_ids:
         rank = db.get_rank(gid, uid)
         u = db.get_user(uid)
         name = await display_name(interaction, uid)
-        lines.append(f"\n`#{rank}` **{name}** — **${u['balance']:,}** ({u['total_spins']} spins)")
+        lines.append(f"\n`#{rank}` **{name}** - **${u['balance']:,}** ({u['total_spins']} spins)")
     await interaction.followup.send("💰 **Richest Players**\n" + "\n".join(lines))
 
 
@@ -2467,28 +2467,28 @@ async def baltop(interaction: discord.Interaction):
 async def help_cmd(interaction: discord.Interaction):
     await interaction.response.send_message(
         "🤖 **BoBot Commands**\n"
-        "🎰 `/spin [amount]` — roll ores\n"
-        "💰 `/baltop` — top 10 richest players\n"
-        "💵 `/balance [@user]` — balance, assets, bank + transfer\n"
-        "🏦 `/bank [@user]` — bank + withdraw\n"
-        "🎒 `/inventory [@user]` — ores, ore pages, quicksell/vault\n"
-        "🗝️ `/vault [@user]` — long-term storage + un-vault\n"
-        "💸 `/quicksell_all` — sell everything instantly\n"
-        "📦 `/market_list` — list an ore (dropdown picker)\n"
-        "🏪 `/market_view` — browse, filter, inspect & buy\n"
-        "🚫 `/market_cancel` — take down a listing (dropdowns + button)\n"
-        "🚫 `/market_cancel_all` — take down ALL listings\n"
-        "🔄 `/trade @user` — trade ores (one-sided OK, both accept)\n"
-        "🎁 `/gift ore @user` — gift ores (they get mail)\n"
-        "🎁 `/gift money @user` — gift balance/bank money\n"
-        "📊 `/stats [@user]` — 3 pages: stats, rarest spin, rarest buy\n"
-        "🏆 `/achievements [@user]` — badges (paged + filter)\n"
-        "🎲 `/odds` — rarities, odds, values\n"
-        "⛏️ `/ores` — browse every ore by tier\n"
-        "📬 `/mail [@user]` — notifications\n"
-        "⚙️ `/settings` — privacy settings\n"
-        "❓ `/faq` — how quicksell/market/spins work\n"
-        "❓ `/help` — this message"
+        "🎰 `/spin [amount]` - roll ores\n"
+        "💰 `/baltop` - top 10 richest players\n"
+        "💵 `/balance [@user]` - balance, assets, bank + transfer\n"
+        "🏦 `/bank [@user]` - bank + withdraw\n"
+        "🎒 `/inventory [@user]` - ores, ore pages, quicksell/vault\n"
+        "🗝️ `/vault [@user]` - long-term storage + un-vault\n"
+        "💸 `/quicksell_all` - sell everything instantly\n"
+        "📦 `/market_list` - list an ore (dropdown picker)\n"
+        "🏪 `/market_view` - browse, filter, inspect & buy\n"
+        "🚫 `/market_cancel` - take down a listing (dropdowns + button)\n"
+        "🚫 `/market_cancel_all` - take down ALL listings\n"
+        "🔄 `/trade @user` - trade ores (one-sided OK, both accept)\n"
+        "🎁 `/gift ore @user` - gift ores (they get mail)\n"
+        "🎁 `/gift money @user` - gift balance/bank money\n"
+        "📊 `/stats [@user]` - 3 pages: stats, rarest spin, rarest buy\n"
+        "🏆 `/achievements [@user]` - badges (paged + filter)\n"
+        "🎲 `/odds` - rarities, odds, values\n"
+        "⛏️ `/ores` - browse every ore by tier\n"
+        "📬 `/mail [@user]` - notifications\n"
+        "⚙️ `/settings` - privacy settings\n"
+        "❓ `/faq` - how quicksell/market/spins work\n"
+        "❓ `/help` - this message"
     )
 
 
@@ -2769,7 +2769,7 @@ def trade_embed(t: dict) -> discord.Embed:
     embed = discord.Embed(title=f"🔄 Trade #{t['id']}", color=0x00BCD4)
     embed.add_field(name=f"{a_ok} {t['a_name']}'s offer", value=fmt(t["a_pick"]), inline=True)
     embed.add_field(name=f"{b_ok} {t['b_name']}'s offer", value=fmt(t["b_pick"]), inline=True)
-    embed.set_footer(text="Offers optional — one side can give nothing. Both hit Accept.")
+    embed.set_footer(text="Offers optional - one side can give nothing. Both hit Accept.")
     return embed
 
 
@@ -2913,7 +2913,7 @@ class TradeMainView(discord.ui.View):
             trades.pop(t["id"], None)
             db.delete_trade(t["id"])
             await interaction.response.edit_message(
-                content="❌ Trade failed — someone no longer has their ore.", embed=None, view=None)
+                content="❌ Trade failed - someone no longer has their ore.", embed=None, view=None)
             return
         if ia is not None:
             db.add_item(b, ia["rarity"], ia["quality"], ia["ore"], ia.get("origin", "spin"), ia.get("origin_detail", ""))
@@ -3042,6 +3042,20 @@ async def on_app_error(interaction: discord.Interaction, error: app_commands.App
                 await interaction.response.send_message(msg, ephemeral=True)
         except Exception:
             pass
+        return
+    # NEVER swallow: log everything else (this hid real bugs before)
+    import traceback as _tb
+    print(f"COMMAND ERROR in /{(interaction.command.name if interaction.command else '?')}: "
+          f"{type(err).__name__}: {err}")
+    _tb.print_exception(type(err), err, err.__traceback__)
+    try:
+        msg = "❌ Something broke running that command - try again."
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except Exception:
+        pass
 
 
 @bot.tree.command(name="admin_event_give", description="[ADMIN] Event prize (grants Winner).")
@@ -3057,7 +3071,7 @@ async def admin_event_give(interaction: discord.Interaction, user: discord.User,
     db.update_user(uid, balance=u["balance"] + amount, total_earned=u["total_earned"] + amount)
     newly = check_achievements(uid, db.get_user(uid), "", "")
     if db.grant_achievement(uid, "winner"):
-        newly.append(f"🏆 **{config.ACHIEVEMENTS['winner'][0]}** — {config.ACHIEVEMENTS['winner'][1]}")
+        newly.append(f"🏆 **{config.ACHIEVEMENTS['winner'][0]}** - {config.ACHIEVEMENTS['winner'][1]}")
     db.add_mail(uid, f"🎉 You won **${amount:,}** from the **{description}**!")
     await interaction.response.send_message(
         f"{user.mention} won **${amount:,}** from the **{description}**!\n" + format_achievements(newly))
@@ -3201,7 +3215,7 @@ class NukeConfirmView(discord.ui.View):
             return
         for child in self.children:
             child.disabled = True
-        await interaction.response.edit_message(content="Phew. Cancelled — nothing was touched.",
+        await interaction.response.edit_message(content="Phew. Cancelled - nothing was touched.",
                                                 embed=None, view=self)
 @app_commands.describe(per_day="Spins per day (number, or -1 for unlimited)",
                        max_at_once="Max per /spin call (number or 'infinite' = 100000)")
@@ -3236,7 +3250,7 @@ async def admin_spins(interaction: discord.Interaction, per_day: str, max_at_onc
 
 # ---------- gifting (one-way, instant, notified via mail) ----------
 
-class ScopeGiftModal(discord.ui.Modal, title="Gift — how many?"):
+class ScopeGiftModal(discord.ui.Modal, title="Gift - how many?"):
     """Moves up to N (or ALL) of the current scope to the recipient + mail."""
 
     amount = discord.ui.TextInput(label="How many? (number or ALL)", placeholder="e.g. 1 or ALL",
@@ -3434,7 +3448,7 @@ bot.tree.add_command(gift_group)
 
 if __name__ == "__main__":
     if not TOKEN:
-        raise SystemExit("Missing DISCORD_TOKEN — copy .env.example to .env and paste your bot token.")
+        raise SystemExit("Missing DISCORD_TOKEN - copy .env.example to .env and paste your bot token.")
     db.init_db()
     install_killswitch()
     bot.run(TOKEN)

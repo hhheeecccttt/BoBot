@@ -2,15 +2,15 @@
 
 Discord bot: 3 spins/day, rarity rolls, quality rolls, quicksell, player market, inventory dropdown, streaks, stats, achievements.
 
-**Server-independent:** every Discord server gets its own separate economy — balances, inventories, vaults, market, achievements, streaks, and even spins/day are all per-server. Same bot, different worlds. (Data from before this update lives under a legacy scope; each server starts fresh.)
+**Server-independent:** every Discord server gets its own separate economy - balances, inventories, vaults, market, achievements, streaks, and even spins/day are all per-server. Same bot, different worlds. (Data from before this update lives under a legacy scope; each server starts fresh.)
 
 ## Quick answers to your questions
 
-- **Player market — impossible?** No, totally doable. Included: `/market_post`, `/market_view`, `/market_buy`, `/market_cancel`.
-- **Inventory dropdown — impossible?** No, easy. `/inventory` shows an embed + a Discord dropdown (Select menu) to inspect each stack. Discord limits dropdowns to 25 options, so huge inventories show the top 25.
+- **Player market - impossible?** No, totally doable. Included: `/market_post`, `/market_view`, `/market_buy`, `/market_cancel`.
+- **Inventory dropdown - impossible?** No, easy. `/inventory` shows an embed + a Discord dropdown (Select menu) to inspect each stack. Discord limits dropdowns to 25 options, so huge inventories show the top 25.
 - **Custom emojis / Nitro?** Bots do NOT get free Nitro. But your bot can use **custom emojis from any server it's in** if you add them there (Server Settings → Emoji → upload). Then put `<:name:id>` in `config.py` emoji fields. The bot currently uses default unicode emoji so it works with zero setup.
-- **Achievements — too ambitious?** No, they're just "if X then grant badge". Included 12 starter ones.
-- **Streak** — tracked (consecutive days with ≥1 spin). Currently set to **no penalty** (`STREAK_REQUIRED_FOR_FULL_LUCK = 1` in `config.py`) so everyone gets normal % from day 1. Tell me if you want reduced luck for broken streaks and I'll wire it in.
+- **Achievements - too ambitious?** No, they're just "if X then grant badge". Included 12 starter ones.
+- **Streak** - tracked (consecutive days with ≥1 spin). Currently set to **no penalty** (`STREAK_REQUIRED_FOR_FULL_LUCK = 1` in `config.py`) so everyone gets normal % from day 1. Tell me if you want reduced luck for broken streaks and I'll wire it in.
 
 ## Setup (5 min)
 

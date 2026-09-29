@@ -1,5 +1,5 @@
 """
-Central game config — edit this when you know your real ores/gems.
+Central game config - edit this when you know your real ores/gems.
 Everything else (bot.py, db.py) reads from here, so you only edit one place.
 """
 
@@ -26,7 +26,7 @@ QUALITIES = {
 }
 
 # Placeholder ores per rarity.
-# TODO: replace these with your real ores. Just add/remove names — no other code changes needed.
+# TODO: replace these with your real ores. Just add/remove names - no other code changes needed.
 # e.g. ORES["Mid"] = ["Emerald", "Amethyst", "Jade"]
 ORES = {
     "Low":   ["Pebble", "Coal", "Copper"],
@@ -40,7 +40,7 @@ ORES = {
 # Your idea: "need to spin at least 3x days in a row to reach normal spin %"
 # Implemented as: streak = consecutive days with >=1 spin.
 # STREAK_REQUIRED_FOR_FULL_LUCK = 3 means new players get slightly reduced luck
-# until they build a 3-day streak — set to 1 or 0 to disable the penalty.
+# until they build a 3-day streak - set to 1 or 0 to disable the penalty.
 STREAK_REQUIRED_FOR_FULL_LUCK = 1  # <-- 1 = no penalty, everyone gets normal % from day 1 (recommended)
 STREAK_NEW_PLAYER_LUCK_MULTIPLIER = 1.0  # reserved: if you want to punish new players, lower DIH chance etc.
 
@@ -129,7 +129,7 @@ def combined_odds(rarity: str, quality: str) -> tuple[float, str]:
 
 
 def quicksell_value(rarity: str) -> int:
-    """Lowest value of the rarity — flat per your spec (quality doesn't change it for now)."""
+    """Lowest value of the rarity - flat per your spec (quality doesn't change it for now)."""
     return RARITIES[rarity]["value"]
 
 
