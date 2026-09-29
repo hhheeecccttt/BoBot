@@ -88,9 +88,10 @@ def time_until_reset() -> str:
 
 
 def check_achievements(user_id: str, u: dict, rarity: str, quality: str,
-                       collectors: bool = True) -> list[str]:
+                       collectors: bool = True, pulled: bool = False) -> list[str]:
     """Grant eligible achievements. Returns list of newly unlocked names.
-    collectors=False skips the (expensive) collector scan — spin passes it once."""
+    collectors=False skips the (expensive) collector scan — spin passes it once.
+    pulled=True only for actual /spin pulls — Pull achievements never fire otherwise."""
     newly = []
 
     def grant(aid: str):
@@ -108,15 +109,15 @@ def check_achievements(user_id: str, u: dict, rarity: str, quality: str,
         grant("spins_1000")
     if ts >= 3650:
         grant("spins_3650")
-    if rarity == "Elite":
+    if pulled and rarity == "Elite":
         grant("elite_pull")
-    if rarity == "DIH":
+    if pulled and rarity == "DIH":
         grant("dih_pull")
         if u.get("dih_pulls", 0) >= 3:
             grant("dih_3")
         if quality == "Perfect":
             grant("jackpot")
-    if quality == "Perfect":
+    if pulled and quality == "Perfect":
         grant("perfect_pull")
         if u.get("perfect_pulls", 0) >= 10:
             grant("perfect_10")
@@ -308,7 +309,7 @@ class SpinView(discord.ui.View):
         view.children[0].label = f"Quicksell ${value:,}"
         result_msg = await interaction.followup.send(content=await _spin_ping(uid, interaction),
                                                      embed=embed, view=view)
-        newly = check_achievements(uid, db.get_user(uid), rarity, quality)
+        newly = check_achievements(uid, db.get_user(uid), rarity, quality, pulled=True)
         if newly:
             await achievement_reply(interaction, interaction.user.mention, newly,
                                     ref_message=result_msg)
@@ -652,15 +653,20 @@ class StackInspectView(discord.ui.View):
     """Ephemeral pop-up holding an inspect dropdown (opened via Inspect button)."""
 
     def __init__(self, viewer_id: int, target_id: int, source: str,
-                 stacks: list[dict], public: bool):
+                 stacks: list[dict], public: bool, guild: str = "DM", inv: bool = True):
         super().__init__(timeout=180)
         self.viewer_id = viewer_id
         self.target_id = target_id
         self.source = source
         self.public = public
+        self.guild = guild
+        self._inv = inv
         self.selected = None
         if stacks:
             self.add_item(BrowserInspectSelect(stacks))
+
+    def _data_inv(self) -> bool:
+        return self._inv
 
 
 class BrowserInspectSelect(discord.ui.Select):
@@ -688,10 +694,11 @@ class BrowserInspectSelect(discord.ui.Select):
         rarity, quality, ore = self.values[0].split("|", 2)
         s = self.lookup[(rarity, quality, ore)]
         view.selected = (rarity, quality)
-        if view.source == "vault":
-            text = vault_inspect_text(str(view.target_id), rarity, quality, s["ore"], s["count"])
+        scoped = f"{view.guild}:{view.target_id}"
+        if view.source == "vault" or not view._data_inv():
+            text = vault_inspect_text(scoped, rarity, quality, s["ore"], s["count"])
         else:
-            text = await inspect_text(interaction, str(view.target_id), rarity, quality,
+            text = await inspect_text(interaction, scoped, rarity, quality,
                                       s["ore"], s["count"])
         await interaction.response.send_message(text, ephemeral=not view.public)
 
@@ -708,7 +715,8 @@ class InvBrowser(discord.ui.View):
                  source: str = "inv", quality: str | None = None, ore: str | None = None,
                  tier: str | None = None, recip_id: int | None = None,
                  recip_name: str = "", trade_tid: int | None = None,
-                 trade_side: str | None = None, guild: str = "DM"):
+                 trade_side: str | None = None, guild: str = "DM",
+                 gift_from: str = "inv"):
         super().__init__(timeout=300)
         self.viewer_id = viewer_id
         self.target_id = target_id
@@ -724,18 +732,21 @@ class InvBrowser(discord.ui.View):
         self.trade_tid = trade_tid
         self.trade_side = trade_side
         self.guild = guild
+        self.gift_from = gift_from
         self._rebuild()
 
-    def _t(self) -> str:
-        """Scoped target id for all DB reads."""
-        return f"{self.guild}:{self.target_id}"
-
     def _inv(self) -> bool:
-        return self.source in ("inv", "gift", "trade", "list")
+        return self.source in ("inv", "gift", "trade")
+
+    def _data_inv(self) -> bool:
+        """True if rows come from inventory (gift-from-vault reads vault)."""
+        if self.source == "gift":
+            return self.gift_from != "vault"
+        return self._inv()
 
     # ----- data -----
     def overviews(self) -> list[dict]:
-        if self._inv():
+        if self._data_inv():
             fn = db.get_ores_by_quality if self.quality else db.get_ores_overview
             ores = fn(self._t(), self.quality) if self.quality else fn(self._t())
         else:
@@ -751,7 +762,7 @@ class InvBrowser(discord.ui.View):
     def stacks(self) -> list[dict]:
         if not self.ore:
             return []
-        if self._inv():
+        if self._data_inv():
             rows = db.get_ore_detail(self._t(), self.ore, self.quality)
         else:
             rows = db.vault_detail(self._t(), self.ore)
@@ -762,7 +773,9 @@ class InvBrowser(discord.ui.View):
         return rows
 
     def totals(self) -> tuple[int, int]:
-        rows = _scope_targets(self._t(), self.source, self.ore, self.quality, self.tier)
+        data_source = "vault" if (self.source == "vault" or
+                                  (self.source == "gift" and not self._data_inv())) else "inv"
+        rows = _scope_targets(self._t(), data_source, self.ore, self.quality, self.tier)
         n = sum(r["count"] for r in rows)
         v = sum(config.quicksell_value(r["rarity"]) * r["count"] for r in rows)
         return n, v
@@ -828,9 +841,8 @@ class InvBrowser(discord.ui.View):
         if inspect_stacks:
             self.add_item(self._inspect_btn(inspect_stacks, disabled=not full))
         mine = self.viewer_id == self.target_id
-        scoped = self.ore is not None or self.quality is not None or self.tier is not None
         full = bool(self.tier and self.ore and self.quality)
-        if mine and scoped:
+        if mine:
             if self.source == "inv":
                 self.add_item(self._qs_btn())
                 self.add_item(self._vault_btn())
@@ -851,7 +863,8 @@ class InvBrowser(discord.ui.View):
                 await interaction.response.send_message("That's not yours!", ephemeral=True)
                 return
             pop = StackInspectView(view.viewer_id, view.target_id, view.source,
-                                   stacks, view.public)
+                                   stacks, view.public, guild=view.guild,
+                                   inv=view._data_inv())
             await interaction.response.send_message(
                 content=f"🔍 Inspect — pick a stack ({len(stacks)} shown):",
                 view=pop, ephemeral=True)
@@ -941,7 +954,8 @@ class InvBrowser(discord.ui.View):
                 await interaction.response.send_message("That's not yours!", ephemeral=True)
                 return
             await interaction.response.send_modal(
-                ScopeGiftModal(view.viewer_id, view.recip_id, view.ore, view.quality, view.tier))
+                ScopeGiftModal(view.viewer_id, view.recip_id, view.ore, view.quality, view.tier,
+                               source=(view.gift_from or "inv")))
         btn = discord.ui.Button(label="Gift", style=discord.ButtonStyle.green, emoji="🎁")
         btn.callback = cb
         return btn
@@ -1164,7 +1178,7 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
     first = True
     for r, q in sorted(set(pulls)):
         try:
-            newly += check_achievements(uid, u, r, q, collectors=first)
+            newly += check_achievements(uid, u, r, q, collectors=first, pulled=True)
         except Exception as e:
             print(f"SPINDBG check failed for {uid} ({r},{q}): {type(e).__name__}: {e}")
         first = False
@@ -3216,13 +3230,22 @@ class ScopeGiftModal(discord.ui.Modal, title="Gift — how many?"):
                                   max_length=8)
 
     def __init__(self, owner_id: int, recip_id: int, ore: str | None, quality: str | None,
-                 tier: str | None = None):
+                 tier: str | None = None, source: str = "inv"):
         super().__init__()
         self.owner_id = owner_id
         self.recip_id = recip_id
         self.ore = ore
         self.quality = quality
         self.tier = tier
+        self.source = source
+
+    async def _recipient_name(self, interaction: discord.Interaction, r: str) -> str:
+        try:
+            u = await interaction.client.fetch_user(int(str(self.recip_id)))
+            return u.display_name
+        except Exception:
+            pass
+        return await display_name(interaction, r)
 
     async def on_submit(self, interaction: discord.Interaction):
         if interaction.user.id != self.owner_id:
@@ -3230,7 +3253,8 @@ class ScopeGiftModal(discord.ui.Modal, title="Gift — how many?"):
             return
         await interaction.response.defer(ephemeral=True)
         g, r = SUID(interaction, self.owner_id), SUID(interaction, self.recip_id)
-        targets = _scope_targets(g, "inv", self.ore, self.quality, self.tier)
+        data_source = "vault" if self.source == "vault" else "inv"
+        targets = _scope_targets(g, data_source, self.ore, self.quality, self.tier)
         if not targets:
             await interaction.followup.send("❌ Nothing to gift.", ephemeral=True)
             return
@@ -3245,16 +3269,25 @@ class ScopeGiftModal(discord.ui.Modal, title="Gift — how many?"):
             limit = max(0, limit)
         moved = 0
         desc_parts = []
+        from_vault = (self.source == "vault")
         for t in targets:
             want = t["count"] if gift_all else min(limit - moved, t["count"])
             if want <= 0:
                 break
             remaining = want
-            for origin, c in db.origin_counts(g, t["rarity"], t["quality"], t["ore"]).items():
+            origins = (db.vault_origin_counts(g, t["rarity"], t["quality"], t["ore"])
+                       if from_vault
+                       else db.origin_counts(g, t["rarity"], t["quality"], t["ore"]))
+            for origin, c in origins.items():
                 k = min(c, remaining)
                 if k <= 0:
                     continue
-                got = db.remove_many_items(g, t["rarity"], t["quality"], t["ore"], k, origin=origin)
+                if from_vault:
+                    got = db.vault_remove_many(g, t["rarity"], t["quality"], t["ore"], k,
+                                               origin=origin)
+                else:
+                    got = db.remove_many_items(g, t["rarity"], t["quality"], t["ore"], k,
+                                               origin=origin)
                 db.add_many_items(r, [(t["rarity"], t["quality"], t["ore"])] * got, origin=origin)
                 moved += got
                 remaining -= got
@@ -3272,10 +3305,10 @@ class ScopeGiftModal(discord.ui.Modal, title="Gift — how many?"):
         newly2 = []
         if moved > 0:
             first2 = True
-            for r, q in gifted_pairs:
-                newly2 += check_achievements(r, db.get_user(r), r, q, collectors=first2)
+            for rr, qq in gifted_pairs:
+                newly2 += check_achievements(r, db.get_user(r), rr, qq, collectors=first2)
                 first2 = False
-        recip_name = await display_name(interaction, r)
+        recip_name = await self._recipient_name(interaction, r)
         result_msg = await interaction.followup.send(
             f"🎁 Gifted **{moved}x** {what} to **{recip_name}**!", ephemeral=True)
         if newly2:
@@ -3286,8 +3319,11 @@ gift_group = app_commands.Group(name="gift", description="Gift ores or money.")
 
 
 @gift_group.command(name="ore", description="Gift ores to another player (they get mail).")
-@app_commands.describe(user="Who gets the gift")
-async def gift_ore(interaction: discord.Interaction, user: discord.User):
+@app_commands.describe(user="Who gets the gift",
+                       source="Gift from inventory or vault")
+@app_commands.choices(source=[app_commands.Choice(name="Inventory", value="inv"),
+                              app_commands.Choice(name="Vault", value="vault")])
+async def gift_ore(interaction: discord.Interaction, user: discord.User, source: str = "inv"):
     await interaction.response.defer(ephemeral=True)
     if user.id == interaction.user.id:
         await interaction.followup.send("❌ You can't gift yourself!", ephemeral=True)
@@ -3295,14 +3331,16 @@ async def gift_ore(interaction: discord.Interaction, user: discord.User):
     if user.bot:
         await interaction.followup.send("❌ You can't gift a bot!", ephemeral=True)
         return
-    if db.count_inventory(SUID(interaction)) == 0:
-        await interaction.followup.send("🎒 Your inventory is empty!", ephemeral=True)
+    uid = SUID(interaction)
+    has_any = (db.count_inventory(uid) if source != "vault" else db.vault_count(uid)) > 0
+    if not has_any:
+        await interaction.followup.send(f"🎒 Your {source} is empty!", ephemeral=True)
         return
     view = InvBrowser(interaction.user.id, interaction.user.id,
                       interaction.user.display_name, False, source="gift",
                       recip_id=user.id,
                       recip_name=await display_name(interaction, str(user.id)),
-                      guild=guild_scope(interaction))
+                      guild=guild_scope(interaction), gift_from=source)
     await interaction.followup.send(embed=view.render(), view=view, ephemeral=True)
 
 
