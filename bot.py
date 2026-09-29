@@ -3221,6 +3221,7 @@ class NukeConfirmView(discord.ui.View):
             child.disabled = True
         await interaction.response.edit_message(content="Phew. Cancelled - nothing was touched.",
                                                 embed=None, view=self)
+@bot.tree.command(name="admin_spins", description="[ADMIN] Set spins per day and max per /spin.")
 @app_commands.describe(per_day="Spins per day (number, or -1 for unlimited)",
                        max_at_once="Max per /spin call (number or 'infinite' = 100000)")
 async def admin_spins(interaction: discord.Interaction, per_day: str, max_at_once: str):
