@@ -194,6 +194,16 @@ def init_db():
                 conn.execute(f"DELETE FROM achievements WHERE ach_id NOT IN ({q})", valid)
         except Exception:
             pass
+        # DIH tier renamed to Mythical: migrate stored rows (idempotent)
+        try:
+            for _t in ("inventory", "vault", "market"):
+                conn.execute(f"UPDATE {_t} SET rarity='Mythical' WHERE rarity='DIH'")
+            conn.execute("UPDATE users SET rarest_spin='Mythical|' || substr(rarest_spin, 5) "
+                         "WHERE rarest_spin LIKE 'DIH|%'")
+            conn.execute("UPDATE users SET rarest_buy='Mythical|' || substr(rarest_buy, 5) "
+                         "WHERE rarest_buy LIKE 'DIH|%'")
+        except Exception:
+            pass
         conn.commit()
 
 # ---------- users ----------

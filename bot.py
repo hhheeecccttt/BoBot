@@ -111,7 +111,7 @@ def check_achievements(user_id: str, u: dict, rarity: str, quality: str,
         grant("spins_3650")
     if pulled and rarity == "Elite":
         grant("elite_pull")
-    if pulled and rarity == "DIH":
+    if pulled and rarity == "Mythical":
         grant("dih_pull")
         if u.get("dih_pulls", 0) >= 3:
             grant("dih_3")
@@ -180,7 +180,7 @@ def current_collectors(user_id: str) -> set[str]:
     earned = set()
     for tier, aid in (("Low", "collector_low"), ("Mid", "collector_mid"),
                       ("High", "collector_high"), ("Elite", "collector_elite"),
-                      ("DIH", "collector_dih")):
+                      ("Mythical", "collector_dih")):
         if all(o in owned_ores for o in config.ORES[tier]):
             earned.add(aid)
     if all(o in owned_ores for ores in config.ORES.values() for o in ores):
@@ -188,7 +188,7 @@ def current_collectors(user_id: str) -> set[str]:
     quals = list(config.QUALITIES.keys())
     for tier, aid in (("Low", "qcollector_low"), ("Mid", "qcollector_mid"),
                       ("High", "qcollector_high"), ("Elite", "qcollector_elite"),
-                      ("DIH", "qcollector_dih")):
+                      ("Mythical", "qcollector_dih")):
         if all((o, q) in owned_pairs for o in config.ORES[tier] for q in quals):
             earned.add(aid)
     if all((o, q) in owned_pairs for ores in config.ORES.values()
@@ -305,8 +305,8 @@ class SpinView(discord.ui.View):
         embed.add_field(name="💰 Quicksell", value=f"${value:,}", inline=True)
         embed.add_field(name="🎰 Spins left today", value=left, inline=True)
         embed.set_footer(text=f"🔥 {u['streak']}-day streak • {interaction.user.display_name}")
-        if rarity == "DIH":
-            embed.add_field(name="🌟", value="**DIH TIER PULL!!** Insane luck.", inline=False)
+        if rarity == "Mythical":
+            embed.add_field(name="🌟", value="**MYTHICAL TIER PULL!!** Insane luck.", inline=False)
         view = SpinView(interaction.user.id, item_id, rarity, quality, ore)
         view.children[0].label = f"Quicksell ${value:,}"
         result_msg = await interaction.followup.send(content=await _spin_ping(uid, interaction),
@@ -1133,9 +1133,9 @@ async def restore_trades():
 
 # ---------- commands ----------
 
-SPIN_ORDER = ["Low", "Mid", "High", "Elite", "DIH"]
+SPIN_ORDER = ["Low", "Mid", "High", "Elite", "Mythical"]
 SPIN_KEYS = {"Low": "low_pulls", "Mid": "mid_pulls", "High": "high_pulls",
-             "Elite": "elite_pulls", "DIH": "dih_pulls"}
+             "Elite": "elite_pulls", "Mythical": "dih_pulls"}
 
 
 def _run_spin_batch(uid: str, n: int):
@@ -1222,8 +1222,8 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
         embed.add_field(name="💰 Quicksell", value=f"${value:,}", inline=True)
         embed.add_field(name="🎰 Spins left today", value=spins_left_text, inline=True)
         embed.set_footer(text=f"🔥 {u['streak']}-day streak • {interaction.user.display_name}")
-        if rarity == "DIH":
-            embed.add_field(name="🌟", value="**DIH TIER PULL!!** Insane luck.", inline=False)
+        if rarity == "Mythical":
+            embed.add_field(name="🌟", value="**MYTHICAL TIER PULL!!** Insane luck.", inline=False)
         if item_id is not None:
             view = SpinView(interaction.user.id, item_id, rarity, quality, ore)
             view.children[0].label = f"Quicksell ${value:,}"
@@ -1833,7 +1833,7 @@ class BuyAmountModal(discord.ui.Modal, title="Buy - how many?"):
         per_seller = defaultdict(lambda: [0, 0])
         for l in rows:
             db.grant_achievement(l["seller_id"], "merchant")
-            if l["rarity"] == "DIH":
+            if l["rarity"] == "Mythical":
                 db.grant_achievement(l["seller_id"], "supplier")
             check_achievements(l["seller_id"], db.get_user(l["seller_id"]), "", "")
             per_seller[l["seller_id"]][0] += 1
@@ -1845,8 +1845,8 @@ class BuyAmountModal(discord.ui.Modal, title="Buy - how many?"):
         # buyer side: counters + achievements
         bu = db.get_user(buyer)
         ups = {}
-        if any(l["rarity"] == "DIH" for l in rows):
-            ups["dih_pulls"] = bu.get("dih_pulls", 0) + sum(1 for l in rows if l["rarity"] == "DIH")
+        if any(l["rarity"] == "Mythical" for l in rows):
+            ups["dih_pulls"] = bu.get("dih_pulls", 0) + sum(1 for l in rows if l["rarity"] == "Mythical")
         if any(l["quality"] == "Perfect" for l in rows):
             ups["perfect_pulls"] = bu.get("perfect_pulls", 0) + sum(1 for l in rows if l["quality"] == "Perfect")
         if ups:
@@ -1854,7 +1854,7 @@ class BuyAmountModal(discord.ui.Modal, title="Buy - how many?"):
         db.grant_achievement(buyer, "customer")
         r0 = rows[0]
         newly = check_achievements(buyer, db.get_user(buyer), r0["rarity"], r0["quality"])
-        if any(l["rarity"] == "DIH" for l in rows) and db.grant_achievement(buyer, "investor"):
+        if any(l["rarity"] == "Mythical" for l in rows) and db.grant_achievement(buyer, "investor"):
             newly.append(f"🏆 **{config.ACHIEVEMENTS['investor'][0]}** - {config.ACHIEVEMENTS['investor'][1]}")
         # rarest buy tracking
         try:
@@ -1987,7 +1987,7 @@ class MarketInspectPopup(discord.ui.View):
             await interaction.response.send_message(f"❌ {msg}", ephemeral=True)
             return
         db.grant_achievement(listing["seller_id"], "merchant")
-        if listing["rarity"] == "DIH":
+        if listing["rarity"] == "Mythical":
             db.grant_achievement(listing["seller_id"], "supplier")
         check_achievements(listing["seller_id"], db.get_user(listing["seller_id"]), "", "")
         buyer_name = await display_name(interaction, buyer)
@@ -1998,7 +1998,7 @@ class MarketInspectPopup(discord.ui.View):
         _bump_obtained(buyer, bu, listing["rarity"], listing["quality"])
         db.grant_achievement(buyer, "customer")
         newly = check_achievements(buyer, db.get_user(buyer), listing["rarity"], listing["quality"])
-        if listing["rarity"] == "DIH" and db.grant_achievement(buyer, "investor"):
+        if listing["rarity"] == "Mythical" and db.grant_achievement(buyer, "investor"):
             newly.append(f"🏆 **{config.ACHIEVEMENTS['investor'][0]}** - {config.ACHIEVEMENTS['investor'][1]}")
         # rarest buy tracking
         try:
@@ -2036,16 +2036,16 @@ async def market_view(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed, view=view)
 
 
-@bot.tree.command(name="market_cancel", description="Cancel your listings (pick from dropdowns).")
+@bot.tree.command(name="market_cancel", description="Cancel your listings (browse + filters).")
 async def market_cancel(interaction: discord.Interaction):
     uid = SUID(interaction)
-    listings = db.market_by_seller(uid, limit=10)
-    if not listings:
+    if not db.market_by_seller(uid, limit=1):
         await interaction.response.send_message("📭 You have no listings! Make one with `/market_list`.",
                                                 ephemeral=True)
         return
-    embed, view = render_cancel(uid, None, None, listings)
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    embed, view = await render_cancel_browser(interaction.user.id, interaction)
+    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 
 @bot.tree.command(name="market_cancel_all", description="Cancel ALL your listings (items return to you).")
@@ -2058,41 +2058,53 @@ async def market_cancel_all(interaction: discord.Interaction):
             f"🚫 Cancelled **{n}** listing(s) - items returned to your inventory.", ephemeral=True)
 
 
-def cancel_lines(listings: list[dict], selected_id: int | None = None) -> list[str]:
-    lines = []
-    for l in listings:
-        mark = "▶ " if l["id"] == selected_id else ""
-        lines.append(f"{mark}`{l['id']}` **{l['ore']} ({l['quality']})** - **${l['price']:,}**")
-    return lines
+def cancel_format(listings: list[dict]) -> list[str]:
+    return [f"`{l['id']}` **{l['ore']}** - **${l['price']:,}**" for l in listings]
 
 
-def render_cancel(scope_uid: str, ore: str | None, quality: str | None,
-                  listings: list[dict] | None = None, selected_id: int | None = None,
-                  tier: str | None = None):
-    """Build the cancel embed + view for a stage. Falls back to stage 1 if empty."""
-    if listings is None:
-        listings = db.market_by_seller(scope_uid, ore, quality, limit=10, tier=tier)
-    if not listings:
-        # fall back to your latest 10 overall
-        ore, quality, selected_id, tier = None, None, None, None
-        listings = db.market_by_seller(scope_uid, limit=10)
-    if ore is None and tier is None:
-        title = "🚫 Your listings - latest 10"
-    elif ore is None:
-        title = f"🚫 Your {config.tier_name(tier)} listings - latest 10"
-    elif quality is None:
-        title = f"🚫 Your {ore} - latest 10"
+async def render_cancel_browser(owner_id: int, interaction: discord.Interaction,
+                                ore: str | None = None, quality: str | None = None,
+                                sort: str | None = None, page: int = 0,
+                                tier: str | None = None):
+    """Cancel browser mirroring market_view: filters + sort + inspect + pages."""
+    scope = SUID(interaction, owner_id)
+    all_listings = db.market_by_seller(scope, ore, quality, limit=50, tier=tier)
+    if sort == "cheapest":
+        all_listings.sort(key=lambda l: (l["price"], -l["id"]))
+    elif sort == "expensive":
+        all_listings.sort(key=lambda l: (-l["price"], -l["id"]))
+    elif sort == "average" and all_listings:
+        mean = sum(l["price"] for l in all_listings) / len(all_listings)
+        all_listings.sort(key=lambda l: (abs(l["price"] - mean), -l["id"]))
     else:
-        title = f"🚫 Your {ore} ({quality}) - latest 10"
-    embed = discord.Embed(title=title, description="\n".join(cancel_lines(listings, selected_id))
-                          if listings else "Nothing here!", color=0xF44336)
-    return embed, CancelBrowser(int(scope_uid.split(":")[-1]), scope_uid, ore=ore, quality=quality,
-                                listings=listings, selected_id=selected_id, tier=tier)
+        all_listings.sort(key=lambda l: -l["id"])
+    pages = max(1, (len(all_listings) + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = page % pages
+    chunk = all_listings[page * PAGE_SIZE:page * PAGE_SIZE + PAGE_SIZE]
+    scope_txt = " - ".join(x for x in (
+        f"{ore}" if ore else None,
+        f"({quality})" if quality else None,
+        config.tier_name(tier) if tier else None) if x)
+    label = {"cheapest": "cheapest", "average": "closest to average",
+             "expensive": "most expensive"}.get(sort or "new", "latest")
+    title = f"🚫 Your listings"
+    if scope_txt:
+        title += f" - {scope_txt}"
+    title += f" - {label}"
+    if pages > 1:
+        title += f" (page {page + 1}/{pages})"
+    embed = discord.Embed(title=title,
+                          description="\n".join(cancel_format(chunk)) if chunk else "Nothing here!",
+                          color=0xF44336)
+    embed.set_footer(text="Inspect a listing, then hit Cancel")
+    return embed, CancelBrowser(owner_id, scope, ore=ore, quality=quality, sort=sort,
+                                page=page, pages=pages, chunk=chunk, tier=tier)
 
 
 class CancelTierSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, current: str | None = None):
+    def __init__(self, owner_id: int, scope: str, current: str | None = None):
         self.owner_id = owner_id
+        self.scope = scope
         super().__init__(placeholder="Filter by tier…", options=[
             discord.SelectOption(label="All tiers", value="all", default=(current is None))
         ] + [discord.SelectOption(label=config.tier_name(r), value=r,
@@ -2101,124 +2113,221 @@ class CancelTierSelect(discord.ui.Select):
              for r in config.RARITIES])
 
     async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.owner_id:
+        view: CancelBrowser = self.view
+        if interaction.user.id != view.owner_id:
             await interaction.response.send_message("That's not yours!", ephemeral=True)
             return
-        tier = None if self.values[0] == "all" else self.values[0]
-        embed, view = render_cancel(SUID(interaction, self.owner_id), None, None, tier=tier)
-        await interaction.response.edit_message(embed=embed, view=view)
+        view.tier = None if self.values[0] == "all" else self.values[0]
+        view.ore = None
+        embed, view2 = await render_cancel_browser(view.owner_id, interaction, tier=view.tier)
+        await interaction.response.edit_message(embed=embed, view=view2)
 
 
 class CancelOreSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, scope_uid: str, tier: str | None = None):
+    def __init__(self, owner_id: int, scope: str, current: str | None = None,
+                 tier: str | None = None):
         self.owner_id = owner_id
-        self.scope_uid = scope_uid
+        self.scope = scope
         self.tier = tier
-        ores = db.market_seller_ores(scope_uid)
+        ores = db.market_seller_ores(scope)
         if tier:
             ores = [o for o in ores if tier in o["rarities"]]
         ores.sort(key=lambda o: min(config.tier_index(r) for r in o["rarities"]))
-        options = []
-        for o in ores[:25]:
-            tiers = ", ".join(config.tier_name(r) for r in sorted(o["rarities"], key=config.tier_index))
-            options.append(discord.SelectOption(
-                label=f"{o['ore']} ({tiers})"[:100], value=o["ore"]))
+        options = [discord.SelectOption(label="All ores", value="all",
+                                        default=(current is None))]
+        for o in ores[:24]:
+            options.append(discord.SelectOption(label=f"{o['ore']}"[:100], value=o["ore"],
+                                                default=(o["ore"] == current)))
         super().__init__(placeholder="Filter by ore…", options=options or [
             discord.SelectOption(label="(no listings)", value="none")])
 
     async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.owner_id:
+        view: CancelBrowser = self.view
+        if interaction.user.id != view.owner_id:
             await interaction.response.send_message("That's not yours!", ephemeral=True)
             return
         if self.values[0] == "none":
             return
-        embed, view = render_cancel(SUID(interaction, self.owner_id), self.values[0], None,
-                                    tier=self.tier)
-        await interaction.response.edit_message(embed=embed, view=view)
+        view.ore = None if self.values[0] == "all" else self.values[0]
+        view.quality = None
+        ores = db.market_seller_ores(view.scope)
+        if view.tier:
+            ores = [o for o in ores if view.tier in o["rarities"]]
+        if view.ore:
+            match = next((o for o in ores if o["ore"] == view.ore), None)
+            if match and match["rarities"]:
+                view.tier = sorted(match["rarities"], key=config.tier_index)[0]
+        embed, view2 = await render_cancel_browser(view.owner_id, interaction, ore=view.ore,
+                                                   quality=view.quality, sort=view.sort,
+                                                   tier=view.tier)
+        await interaction.response.edit_message(embed=embed, view=view2)
 
 
 class CancelQualitySelect(discord.ui.Select):
-    def __init__(self, owner_id: int, scope_uid: str, ore: str, tier: str | None = None):
+    def __init__(self, owner_id: int, scope: str, ore: str | None = None,
+                 current: str | None = None, tier: str | None = None):
         self.owner_id = owner_id
-        self.scope_uid = scope_uid
+        self.scope = scope
         self.ore = ore
         self.tier = tier
-        quals = db.market_seller_qualities(scope_uid, ore)
-        options = [discord.SelectOption(label=q, value=q) for q in quals[:25]]
+        if ore:
+            quals = db.market_seller_qualities(scope, ore)
+        else:
+            quals = list(config.QUALITIES.keys())
+        options = [discord.SelectOption(label="All qualities", value="all",
+                                        default=(current is None))]
+        options += [discord.SelectOption(label=q, value=q, default=(q == current))
+                    for q in quals[:24]]
         super().__init__(placeholder="Filter by quality…", options=options or [
             discord.SelectOption(label="(none)", value="none")])
 
     async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.owner_id:
+        view: CancelBrowser = self.view
+        if interaction.user.id != view.owner_id:
             await interaction.response.send_message("That's not yours!", ephemeral=True)
             return
         if self.values[0] == "none":
             return
-        embed, view = render_cancel(SUID(interaction, self.owner_id), self.ore, self.values[0],
-                                    tier=self.tier)
-        await interaction.response.edit_message(embed=embed, view=view)
+        view.quality = None if self.values[0] == "all" else self.values[0]
+        embed, view2 = await render_cancel_browser(view.owner_id, interaction, ore=view.ore,
+                                                   quality=view.quality, sort=view.sort,
+                                                   tier=view.tier)
+        await interaction.response.edit_message(embed=embed, view=view2)
 
 
-class CancelListingSelect(discord.ui.Select):
-    """Every stage has one: pick which listing to cancel, then hit the button."""
-
-    def __init__(self, owner_id: int, listings: list[dict]):
+class CancelSortSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, current: str | None):
         self.owner_id = owner_id
+        super().__init__(placeholder="Sort…", options=[
+            discord.SelectOption(label="Latest", value="new", emoji="🆕",
+                                 default=(current in (None, "new"))),
+            discord.SelectOption(label="Cheapest", value="cheapest", emoji="💲",
+                                 default=(current == "cheapest")),
+            discord.SelectOption(label="Closest to average", value="average", emoji="📊",
+                                 default=(current == "average")),
+            discord.SelectOption(label="Most expensive", value="expensive", emoji="💎",
+                                 default=(current == "expensive")),
+        ])
+
+    async def callback(self, interaction: discord.Interaction):
+        view: CancelBrowser = self.view
+        if interaction.user.id != view.owner_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        view.sort = self.values[0]
+        embed, view2 = await render_cancel_browser(view.owner_id, interaction, ore=view.ore,
+                                                   quality=view.quality, sort=view.sort, page=0,
+                                                   tier=view.tier)
+        await interaction.response.edit_message(embed=embed, view=view2)
+
+
+class CancelListingInspectSelect(discord.ui.Select):
+    def __init__(self, listings: list[dict]):
         options = []
         for l in listings[:25]:
-            label = f"{l['ore']} ({l['quality']}) - ${l['price']:,}"[:100]
-            options.append(discord.SelectOption(label=label, description=f"ID {l['id']}",
+            label = f"{l['ore']} - ${l['price']:,}"[:100]
+            desc = f"{l['quality']} • {config.tier_name(l['rarity'])} • ID {l['id']}"[:100]
+            options.append(discord.SelectOption(label=label, description=desc,
                                                 value=str(l["id"])))
-        super().__init__(placeholder="Choose one to cancel…", options=options or [
+        super().__init__(placeholder="Inspect a listing…", options=options or [
             discord.SelectOption(label="(none)", value="none")])
 
     async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("That's not yours!", ephemeral=True)
-            return
         if self.values[0] == "none":
             return
         view: CancelBrowser = self.view
-        embed, _ = render_cancel(view.scope_uid, view.ore, view.quality,
-                                 selected_id=int(self.values[0]))
-        view.selected_id = int(self.values[0])
-        await interaction.response.edit_message(embed=embed, view=view)
+        listing = db.market_get(int(self.values[0]))
+        if listing is None or listing["seller_id"] != view.scope:
+            await interaction.response.send_message("❌ That listing is gone!", ephemeral=True)
+            return
+        quick = config.quicksell_value(listing["rarity"])
+        r_chance = config.RARITIES[listing["rarity"]]["chance"]
+        q_chance = config.QUALITIES[listing["quality"]]["chance"]
+        embed = discord.Embed(
+            title=f"{listing['ore']} - ${listing['price']:,}",
+            description=f"Quality: **{listing['quality']}** - {q_chance:g}% (1 in {config.rarity_one_in(q_chance)} chance)\n"
+                        f"Tier: **{config.tier_name(listing['rarity'])}** - {r_chance:g}% (1 in {config.rarity_one_in(r_chance)} chance)\n"
+                        f"Quicksell value: **${quick:,}**",
+            color=0xF44336)
+        cview = CancelListingView(view.owner_id, listing["id"])
+        await interaction.response.send_message(embed=embed, view=cview, ephemeral=True)
 
 
-class CancelBrowser(discord.ui.View):
-    def __init__(self, owner_id: int, scope_uid: str, ore: str | None = None, quality: str | None = None,
-                 listings: list[dict] | None = None, selected_id: int | None = None,
-                 tier: str | None = None):
-        super().__init__(timeout=300)
+class CancelListingView(discord.ui.View):
+    def __init__(self, owner_id: int, listing_id: int):
+        super().__init__(timeout=180)
         self.owner_id = owner_id
-        self.scope_uid = scope_uid
-        self.ore = ore
-        self.quality = quality
-        self.tier = tier
-        self.listings = listings or []
-        self.selected_id = selected_id
-        self.add_item(CancelTierSelect(owner_id))
-        if ore is None:
-            self.add_item(CancelOreSelect(owner_id, scope_uid, tier=tier))
-        elif quality is None:
-            self.add_item(CancelQualitySelect(owner_id, scope_uid, ore, tier=tier))
-        if self.listings:
-            self.add_item(CancelListingSelect(owner_id, self.listings))
+        self.listing_id = listing_id
 
-    @discord.ui.button(label="Cancel this", style=discord.ButtonStyle.danger, emoji="🗑️")
-    async def cancel_this(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="🗑️")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message("That's not yours!", ephemeral=True)
             return
-        if self.selected_id is None:
-            await interaction.response.send_message("☝️ Pick a listing from the dropdown first!",
-                                                    ephemeral=True)
-            return
-        ok, msg = db.market_cancel(self.selected_id, self.scope_uid,
-                                     guild_scope(interaction))
-        embed, view = render_cancel(self.scope_uid, self.ore, self.quality, tier=self.tier)
-        await interaction.response.edit_message(embed=embed, view=view)
+        ok, msg = db.market_cancel(self.listing_id, SUID(interaction, self.owner_id),
+                                   guild_scope(interaction))
+        button.disabled = True
+        try:
+            await interaction.response.edit_message(view=self)
+        except Exception:
+            pass
         await interaction.followup.send(("✅ " if ok else "❌ ") + msg, ephemeral=True)
+
+
+class CancelBrowser(discord.ui.View):
+    def __init__(self, owner_id: int, scope: str, ore: str | None = None,
+                 quality: str | None = None, sort: str | None = None,
+                 page: int = 0, pages: int = 1,
+                 chunk: list[dict] | None = None, tier: str | None = None):
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+        self.scope = scope
+        self.ore = ore
+        self.quality = quality
+        self.sort = sort
+        self.page = page
+        self.pages = pages
+        self.tier = tier
+        self.chunk = chunk or []
+        self.add_item(CancelTierSelect(owner_id, scope, current=tier))
+        self.add_item(CancelOreSelect(owner_id, scope, current=ore, tier=tier))
+        self.add_item(CancelQualitySelect(owner_id, scope, ore=ore, current=quality, tier=tier))
+        self.add_item(CancelSortSelect(owner_id, sort))
+        if self.chunk:
+            self.add_item(self._inspect_btn())
+
+    def _inspect_btn(self):
+        view = self
+
+        async def cb(interaction: discord.Interaction):
+            if interaction.user.id != view.owner_id:
+                await interaction.response.send_message("That's not yours!", ephemeral=True)
+                return
+            pop = discord.ui.View(timeout=180)
+            pop.add_item(CancelListingInspectSelect(view.chunk))
+            await interaction.response.send_message(
+                content=f"🔍 Inspect - pick a listing ({len(view.chunk)} shown):",
+                view=pop, ephemeral=True)
+        btn = discord.ui.Button(label="Inspect", style=discord.ButtonStyle.secondary, emoji="🔍")
+        btn.callback = cb
+        return btn
+
+    async def _flip(self, interaction: discord.Interaction, delta: int):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        embed, view = await render_cancel_browser(self.owner_id, interaction, ore=self.ore,
+                                                  quality=self.quality, sort=self.sort,
+                                                  page=self.page + delta, tier=self.tier)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    @discord.ui.button(label="", emoji="◀", style=discord.ButtonStyle.secondary, row=4)
+    async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._flip(interaction, -1)
+
+    @discord.ui.button(label="", emoji="▶", style=discord.ButtonStyle.secondary, row=4)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._flip(interaction, 1)
 
 
 # ----- stats / streak / achievements -----
@@ -2239,7 +2348,7 @@ async def stats(interaction: discord.Interaction, user: discord.User | None = No
 
 
 def parse_best(val: str) -> tuple[str, str, str] | None:
-    """Stored global best looks like 'DIH|Perfect|Painite'. Old data may be just a rarity."""
+    """Stored global best looks like 'Mythical|Perfect|Painite'. Old data may be just a rarity."""
     if not val:
         return None
     parts = val.split("|")
@@ -2271,7 +2380,7 @@ class StatsView(discord.ui.View):
             embed.description = (
                 f"🎰 Total spins: **{u['total_spins']}**\n"
                 f"🪨 Low Tier: **{u['low_pulls']}** | 💚 Mid Tier: **{u['mid_pulls']}** | 💎 High Tier: **{u['high_pulls']}**\n"
-                f"👑 Elite Tier: **{u['elite_pulls']}** | 🌟 DIH Tier: **{u['dih_pulls']}**\n"
+                f"👑 Elite Tier: **{u['elite_pulls']}** | 🌟 Mythical Tier: **{u['dih_pulls']}**\n"
                 f"🔥 Streak: **{u['streak']}** days (best: **{u['longest_streak']}**)\n"
                 f"💰 Balance: **${u['balance']:,}** | Earned: **${u['total_earned']:,}**\n"
                 f"🎒 Inventory: **{inv_count}** ores\n"
@@ -2434,7 +2543,7 @@ async def odds(interaction: discord.Interaction):
     embed.add_field(name="✨ Qualities (rolled on every spin)", value="\n".join(q_lines), inline=False)
     embed.add_field(
         name="📊 How combo odds work",
-        value="rarity% × quality% - e.g. DIH Perfect = 0.1% × 1% = **0.001% (1 in 100,000)**",
+        value="rarity% × quality% - e.g. Mythical Perfect = 0.1% × 1% = **0.001% (1 in 100,000)**",
         inline=False,
     )
     await interaction.response.send_message(embed=embed)
@@ -2654,7 +2763,8 @@ async def help_cmd(interaction: discord.Interaction):
         "📬 `/mail [@user]` - notifications\n"
         "⚙️ `/settings` - privacy settings\n"
         "❓ `/faq` - how quicksell/market/spins work\n"
-        "❓ `/help` - this message"
+        "❓ `/help` - this message",
+        ephemeral=True,
     )
 
 
@@ -2911,7 +3021,7 @@ def _pick_dumps(p) -> str | None:
 def _bump_obtained(uid: str, u: dict, rarity: str, quality: str):
     """Count any-source obtains toward Obtain achievements (market/trade/gift)."""
     ups = {}
-    if rarity == "DIH":
+    if rarity == "Mythical":
         ups["dih_pulls"] = u.get("dih_pulls", 0) + 1
     if quality == "Perfect":
         ups["perfect_pulls"] = u.get("perfect_pulls", 0) + 1

@@ -15,7 +15,7 @@ RARITIES = {
     "Mid":     {"chance": 25.0, "value": 28,    "color": 0x4CAF50, "emoji": "💚", "dot": "🟢"},
     "High":    {"chance": 4.0,  "value": 175,   "color": 0x2196F3, "emoji": "💎", "dot": "🔵"},
     "Elite":   {"chance": 0.9,  "value": 778,   "color": 0x9C27B0, "emoji": "👑", "dot": "🟣"},
-    "DIH":     {"chance": 0.1,  "value": 28000, "color": 0xFFD700, "emoji": "🌟", "dot": "🟡"},
+    "Mythical": {"chance": 0.1,  "value": 28000, "color": 0xFFD700, "emoji": "🌟", "dot": "🟡"},
 }
 
 # Quality: chance %
@@ -25,15 +25,22 @@ QUALITIES = {
     "Perfect":  {"chance": 1.0,  "emoji": "✨", "multiplier": 1.0},
 }
 
-# Placeholder ores per rarity.
-# TODO: replace these with your real ores. Just add/remove names - no other code changes needed.
-# e.g. ORES["Mid"] = ["Emerald", "Amethyst", "Jade"]
+# The full ore catalog per rarity.
 ORES = {
-    "Low":   ["Pebble", "Coal", "Copper"],
-    "Mid":   ["Iron", "Emerald", "Amethyst"],
-    "High":  ["Ruby", "Sapphire", "Topaz"],
-    "Elite": ["Diamond", "Opal", "Onyx"],
-    "DIH":   ["Painite", "DIH Ore"],
+    "Low": ["Copper", "Iron", "Tin", "Zinc", "Chromite", "Sulfur", "Silver",
+            "Coal", "Quartz", "Nickel", "Lead", "Manganese"],
+    "Mid": ["Topaz", "Jade", "Lapis Lazuli", "Obsidian", "Pyrite", "Azurite",
+            "Sunstone", "Moonstone", "Amber", "Garnet", "Pearl", "Aragonite",
+            "Calcite", "Kyanite", "Malachite", "Barite"],
+    "High": ["Amethyst", "Fluorite", "Tanzanite", "Gold", "Red Beryl", "Tsavorite",
+             "Opal", "Aquamarine", "Wulfenite", "Blue Topaz", "Morganite",
+             "Imperial Topaz", "Chrome Diopside", "Spinel", "Peridot", "Iolite",
+             "Sugalite", "Euclase"],
+    "Elite": ["Emerald", "Ruby", "Chalcanthite", "Black Opal", "Paraíba Tourmaline",
+              "Cobaltoan Calcite", "Vanadinite", "Benitoite", "Vivianite",
+              "Rhodochrosite", "Diaboleite", "Linarite"],
+    "Mythical": ["Painite", "Alexandrite", "Clear Diamond", "Blue Diamond",
+                 "Pink Diamond", "Black Diamond", "Golden Diamond"],
 }
 
 # --- Streaks ---
@@ -42,7 +49,7 @@ ORES = {
 # STREAK_REQUIRED_FOR_FULL_LUCK = 3 means new players get slightly reduced luck
 # until they build a 3-day streak - set to 1 or 0 to disable the penalty.
 STREAK_REQUIRED_FOR_FULL_LUCK = 1  # <-- 1 = no penalty, everyone gets normal % from day 1 (recommended)
-STREAK_NEW_PLAYER_LUCK_MULTIPLIER = 1.0  # reserved: if you want to punish new players, lower DIH chance etc.
+STREAK_NEW_PLAYER_LUCK_MULTIPLIER = 1.0  # reserved: if you want to punish new players, lower Mythical chance etc.
 
 # --- Achievements ---
 # id: (name, description, check handled in bot.py)
@@ -53,23 +60,23 @@ ACHIEVEMENTS = {
     "spins_1000":   ("Degenerate", "Reach 1,000 total spins"),
     "spins_3650":   ("One Year", "Reach 3,650 total spins"),
     "elite_pull":   ("The Mediocre Leagues", "Pull a Elite Tier ore"),
-    "dih_pull":     ("The Big Leagues", "Pull a DIH Tier ore"),
-    "dih_3":        ("The Bigger Leagues", "Obtain 3 DIH Tier ores"),
+    "dih_pull":     ("The Big Leagues", "Pull a Mythical Tier ore"),
+    "dih_3":        ("The Bigger Leagues", "Obtain 3 Mythical Tier ores"),
     "perfect_pull": ("Flawless", "Pull a Perfect condition ore"),
     "perfect_10":   ("Majestic", "Obtain 10 Perfect condition ores"),
     "perfect_30":   ("Divine", "Obtain 30 Perfect condition ores"),
-    "jackpot":      ("Jackpot", "Pull a Perfect condition DIH Tier ore"),
+    "jackpot":      ("Jackpot", "Pull a Perfect condition Mythical Tier ore"),
     "collector_low":   ("Rookie Collector", "Collect every Low Tier ore"),
     "collector_mid":   ("Amateur Collector", "Collect every Mid Tier ore"),
     "collector_high":  ("Experienced Collector", "Collect every High Tier ore"),
     "collector_elite": ("Pro Collector", "Collect every Elite Tier ore"),
-    "collector_dih":   ("Top Collector", "Collect every DIH Tier ore"),
+    "collector_dih":   ("Top Collector", "Collect every Mythical Tier ore"),
     "collector_all":   ("Semi-Maxxed Collection", "Collect every ore"),
     "qcollector_low":   ("Small Collector", "Collect every quality of Low Tier ores"),
     "qcollector_mid":   ("Medium Collector", "Collect every quality of Mid Tier ores"),
     "qcollector_high":  ("Big Collector", "Collect every quality of High Tier ores"),
     "qcollector_elite": ("Giant Collector", "Collect every quality of Elite Tier ores"),
-    "qcollector_dih":   ("Luck Max Collector", "Collect every quality of DIH Tier ores"),
+    "qcollector_dih":   ("Luck Max Collector", "Collect every quality of Mythical Tier ores"),
     "qcollector_all":   ("Maxxed Completion", "Collect every quality of every ore"),
     "rich_100":     ("On the Streets", "Reach a $100 balance"),
     "rich_1k":      ("First Bag", "Reach a $1,000 balance"),
@@ -89,8 +96,8 @@ ACHIEVEMENTS = {
     "customer":     ("Customer", "Buy something on the player market"),
     "merchant_10":  ("Experienced Merchant", "Sell 10 ores on the player market"),
     "customer_10":  ("Regular Customer", "Buy 10 ores on the player market"),
-    "investor":     ("Investor", "Buy a DIH Tier ore from the player market"),
-    "supplier":     ("Supplier", "Sell a DIH Tier ore on the player market"),
+    "investor":     ("Investor", "Buy a Mythical Tier ore from the player market"),
+    "supplier":     ("Supplier", "Sell a Mythical Tier ore on the player market"),
     "winner":       ("Winner", "Win a BoBo event"),
     "all_done":     ("It's Over", "Achieve it all"),
 }
@@ -118,7 +125,7 @@ def combined_odds(rarity: str, quality: str) -> tuple[float, str]:
     Returns (percent, '1 in X' string) for a rarity+quality combo.
     percent = rarity_chance * quality_chance / 100
     one_in  = 100 / percent
-    Example: DIH (0.1%) + Perfect (1%) -> 0.001% -> 1 in 100,000
+    Example: Mythical (0.1%) + Perfect (1%) -> 0.001% -> 1 in 100,000
     """
     r = RARITIES[rarity]["chance"]
     q = QUALITIES[quality]["chance"]
