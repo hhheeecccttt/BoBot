@@ -2867,6 +2867,17 @@ def _pick_dumps(p) -> str | None:
     return json.dumps(p) if p else None
 
 
+def _bump_obtained(uid: str, u: dict, rarity: str, quality: str):
+    """Count any-source obtains toward Obtain achievements (market/trade/gift)."""
+    ups = {}
+    if rarity == "DIH":
+        ups["dih_pulls"] = u.get("dih_pulls", 0) + 1
+    if quality == "Perfect":
+        ups["perfect_pulls"] = u.get("perfect_pulls", 0) + 1
+    if ups:
+        db.update_user(uid, **ups)
+
+
 def _persist_trade(t: dict):
     db.update_trade(t["id"], a_pick=_pick_dumps(t["a_pick"]), b_pick=_pick_dumps(t["b_pick"]),
                     a_ok=int(t["a_ok"]), b_ok=int(t["b_ok"]), stage=t.get("stage", "request"),
@@ -3040,8 +3051,12 @@ class TradeMainView(discord.ui.View):
             return
         if ia is not None:
             db.add_item(b, ia["rarity"], ia["quality"], ia["ore"], ia.get("origin", "spin"), ia.get("origin_detail", ""))
+            ub = db.get_user(b)
+            _bump_obtained(b, ub, ia["rarity"], ia["quality"])
         if ib is not None:
             db.add_item(a, ib["rarity"], ib["quality"], ib["ore"], ib.get("origin", "spin"), ib.get("origin_detail", ""))
+            ua = db.get_user(a)
+            _bump_obtained(a, ua, ib["rarity"], ib["quality"])
         trades.pop(t["id"], None)
         db.delete_trade(t["id"])
         # obtain achievements (incl. Jackpot) per recipient + collector rechecks
@@ -3574,9 +3589,12 @@ class GiftMoneyView(discord.ui.View):
             db.update_user(g, bank_balance=u.get("bank_balance", 0) - self.amount)
         ru = db.get_user(r)
         db.update_user(r, balance=ru["balance"] + self.amount)
-        check_achievements(r, db.get_user(r), "", "")  # money tiers still unlock
+        newly = check_achievements(r, db.get_user(r), "", "")
         giver_name = await display_name(interaction, g)
-        db.add_mail(r, f"🎁 **{giver_name}** gifted you **${self.amount:,}**!")
+        mail_text = f"🎁 **{giver_name}** gifted you **${self.amount:,}**!"
+        if newly:
+            mail_text += "\n" + format_achievements(newly)
+        db.add_mail(r, mail_text)
         button.disabled = True
         await interaction.response.edit_message(
             content=f"🎁 Sent **${self.amount:,}** to **{self.recip_name}**!", embed=None, view=self)
