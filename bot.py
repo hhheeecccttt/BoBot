@@ -2590,7 +2590,7 @@ class OresView(discord.ui.View):
             owned = set()
         embed = discord.Embed(
             title=f"{ri['dot']} {config.tier_name(r)} Ores",
-            description="\n".join(f"{'✅' if o in owned else '⬜'} **{o}**" for o in config.ORES[r]),
+            description="\n".join(f"{'✅' if o in owned else '❌'} **{o}**" for o in config.ORES[r]),
             color=ri["color"])
         embed.add_field(name="💰 Quicksell", value=f"${ri['value']:,} each", inline=True)
         embed.add_field(name="📊 Rarity odds",

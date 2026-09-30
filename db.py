@@ -204,6 +204,12 @@ def init_db():
                          "WHERE rarest_buy LIKE 'DIH|%'")
         except Exception:
             pass
+        # Garnet moved Mid -> Elite: migrate stored rows (idempotent)
+        try:
+            for _t in ("inventory", "vault", "market"):
+                conn.execute(f"UPDATE {_t} SET rarity='Elite' WHERE ore='Garnet' AND rarity='Mid'")
+        except Exception:
+            pass
         conn.commit()
 
 # ---------- users ----------
