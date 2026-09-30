@@ -1932,6 +1932,25 @@ class MarketBrowser(discord.ui.View):
                                 disabled=disabled)
         btn.callback = cb
         return btn
+    async def _flip(self, interaction: discord.Interaction, delta: int):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Use `/market_view` to browse yourself!",
+                                                    ephemeral=True)
+            return
+        embed, view = await render_market(self.owner_id, interaction, ore=self.ore,
+                                          quality=self.quality, sort=self.sort,
+                                          page=self.page + delta, tier=self.tier)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    @discord.ui.button(label="", emoji="◀", style=discord.ButtonStyle.secondary, row=4)
+    async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._flip(interaction, -1)
+
+    @discord.ui.button(label="", emoji="▶", style=discord.ButtonStyle.secondary, row=4)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._flip(interaction, 1)
+
+
 
 
 class MarketInspectPopup(discord.ui.View):
@@ -2006,25 +2025,6 @@ class MarketInspectPopup(discord.ui.View):
             pass
         if newly:
             await achievement_reply(interaction, interaction.user.mention, newly)
-
-    async def _flip(self, interaction: discord.Interaction, delta: int):
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("Use `/market_view` to browse yourself!",
-                                                    ephemeral=True)
-            return
-        embed, view = await render_market(self.owner_id, interaction, ore=self.ore,
-                                          quality=self.quality, sort=self.sort,
-                                          page=self.page + delta, tier=self.tier)
-        await interaction.response.edit_message(embed=embed, view=view)
-
-    @discord.ui.button(label="", emoji="◀", style=discord.ButtonStyle.secondary, row=4)
-    async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._flip(interaction, -1)
-
-    @discord.ui.button(label="", emoji="▶", style=discord.ButtonStyle.secondary, row=4)
-    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._flip(interaction, 1)
-
 
 @bot.tree.command(name="market_view", description="Browse the player market (latest + filters).")
 async def market_view(interaction: discord.Interaction):
