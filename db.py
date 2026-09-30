@@ -514,6 +514,32 @@ def inventory_value(user_id: str, ore: str | None = None, quality: str | None = 
 
 # ---------- market ----------
 
+def market_list_many(guild_id: str, seller_id: str, stacks: list[dict],
+                     price: int, amount: int) -> int:
+    """List up to `amount` ores across the given grouped stacks. Batched.
+    Returns how many listings were actually created."""
+    made = 0
+    took: list[tuple[str, str, str]] = []
+    remaining = max(0, amount)
+    for t in stacks:
+        if remaining <= 0:
+            break
+        want = min(t["count"], remaining)
+        got = remove_many_items(seller_id, t["rarity"], t["quality"], t["ore"], want)
+        took += [(t["rarity"], t["quality"], t["ore"])] * got
+        made += got
+        remaining -= got
+    if took:
+        with _lock, get_conn() as conn:
+            conn.executemany(
+                "INSERT INTO market (guild_id, seller_id, rarity, quality, ore, price) "
+                "VALUES (?,?,?,?,?,?)",
+                [(guild_id, seller_id, r, q, o, price) for r, q, o in took],
+            )
+            conn.commit()
+    return made
+
+
 def market_list(guild_id: str, seller_id: str, rarity: str, quality: str, ore: str,
                 price: int) -> int | None:
     """Removes one item from seller inventory and creates a listing. Returns listing id or None."""

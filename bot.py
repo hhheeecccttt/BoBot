@@ -909,7 +909,9 @@ class InvBrowser(discord.ui.View):
             inspect_stacks = all_stacks or None
         full = bool(self.tier and self.ore and self.quality)
         if inspect_stacks:
-            self.add_item(self._inspect_btn(inspect_stacks, disabled=not full))
+            # list mode: inspect never grayed; elsewhere needs all 3 dropdowns picked
+            gray = False if self.source == "list" else not full
+            self.add_item(self._inspect_btn(inspect_stacks, disabled=gray))
         mine = self.viewer_id == self.target_id
         full = bool(self.tier and self.ore and self.quality)
         if mine:
@@ -1503,16 +1505,7 @@ class ListPriceModal(discord.ui.Modal, title="List - price each?"):
         uid = SUID(interaction, self.owner_id)
         gid = guild_scope(interaction)
         targets = _scope_targets(uid, "inv", self.ore, self.quality, self.tier)
-        made, remaining = 0, self.amount
-        for t in targets:
-            if remaining <= 0:
-                break
-            want = min(t["count"], remaining)
-            got = db.remove_many_items(uid, t["rarity"], t["quality"], t["ore"], want)
-            for _ in range(got):
-                db.market_list(gid, uid, t["rarity"], t["quality"], t["ore"], price)
-            made += got
-            remaining -= got
+        made = db.market_list_many(gid, uid, targets, price, self.amount)
         sync_collectors(uid)
         if self.bview is not None and self.browser_message is not None:
             try:
@@ -1548,12 +1541,7 @@ BROWSE_LIMIT = 50  # per stage; pages flip through these 10 at a time
 
 
 async def seller_name(interaction: discord.Interaction, seller_id: str) -> str:
-    """Seller display name - Anonymous unless they've set market listings public."""
-    try:
-        if not db.get_user(seller_id).get("market_public", 0):
-            return "Anonymous"
-    except Exception:
-        return "Anonymous"
+    """Seller display name (always shown)."""
     return await display_name(interaction, seller_id)
 
 
@@ -2743,8 +2731,6 @@ SETTING_DEFS = [
     ("bank", "bank_public", "🏦 Bank"),
     ("balance", "balance_public", "💵 Balance"),
     ("mail", "mail_public", "📬 Mail"),
-    ("market", "market_public", "🏪 Market listings (your seller name)"),
-    ("timezone", "timezone", "🕐 Timezone"),
 ]
 
 
