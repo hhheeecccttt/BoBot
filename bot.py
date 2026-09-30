@@ -1436,9 +1436,11 @@ async def quicksell_all(interaction: discord.Interaction):
 
 # ---------- market listing (amount first, then price) ----------
 
-class ListAmountModal(discord.ui.Modal, title="List - how many?"):
-    amount = discord.ui.TextInput(label="How many to list? (number or ALL)",
-                                  placeholder="e.g. 3 or ALL", max_length=8)
+class ListAmountModal(discord.ui.Modal, title="List ores"):
+    amount = discord.ui.TextInput(label="How many? (number or ALL)", placeholder="e.g. 3 or ALL",
+                                  max_length=8)
+    price = discord.ui.TextInput(label="Price per ore ($)", placeholder="e.g. 500",
+                                 max_length=12)
 
     def __init__(self, owner_id: int, ore: str | None, quality: str | None,
                  tier: str | None = None, bview=None, browser_message=None):
@@ -1455,6 +1457,7 @@ class ListAmountModal(discord.ui.Modal, title="List - how many?"):
             await interaction.response.send_message("That's not yours!", ephemeral=True)
             return
         uid = SUID(interaction, self.owner_id)
+        gid = guild_scope(interaction)
         targets = _scope_targets(uid, "inv", self.ore, self.quality, self.tier)
         total = sum(t["count"] for t in targets)
         if total <= 0:
@@ -1467,45 +1470,21 @@ class ListAmountModal(discord.ui.Modal, title="List - how many?"):
             try:
                 n = int(raw)
             except ValueError:
-                await interaction.response.send_message("❌ Type a number or ALL.", ephemeral=True)
+                await interaction.response.send_message("❌ Amount must be a number or ALL.",
+                                                        ephemeral=True)
                 return
         n = max(1, min(n, total))
-        await interaction.response.send_modal(
-            ListPriceModal(self.owner_id, self.ore, self.quality, self.tier, n,
-                           bview=self.bview, browser_message=self.browser_message))
-
-
-class ListPriceModal(discord.ui.Modal, title="List - price each?"):
-    price = discord.ui.TextInput(label="Price per ore ($)", placeholder="e.g. 500", max_length=12)
-
-    def __init__(self, owner_id: int, ore: str | None, quality: str | None, tier: str | None,
-                 amount: int, bview=None, browser_message=None):
-        super().__init__()
-        self.owner_id = owner_id
-        self.ore = ore
-        self.quality = quality
-        self.tier = tier
-        self.amount = amount
-        self.bview = bview
-        self.browser_message = browser_message
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("That's not yours!", ephemeral=True)
-            return
         try:
             price = int(str(self.price.value).replace(",", "").replace("$", "").strip())
         except ValueError:
-            await interaction.response.send_message("❌ Price must be a whole number.", ephemeral=True)
+            await interaction.response.send_message("❌ Price must be a whole number.",
+                                                    ephemeral=True)
             return
         if price < 1:
             await interaction.response.send_message("❌ Price must be at least $1.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
-        uid = SUID(interaction, self.owner_id)
-        gid = guild_scope(interaction)
-        targets = _scope_targets(uid, "inv", self.ore, self.quality, self.tier)
-        made = db.market_list_many(gid, uid, targets, price, self.amount)
+        made = db.market_list_many(gid, uid, targets, price, n)
         sync_collectors(uid)
         if self.bview is not None and self.browser_message is not None:
             try:
@@ -1519,7 +1498,6 @@ class ListPriceModal(discord.ui.Modal, title="List - price each?"):
                 pass
         await interaction.followup.send(
             f"📦 Listed **{made}x** for **${price:,}** each!", ephemeral=True)
-
 
 
 
@@ -1774,6 +1752,10 @@ class MarketListingInspectSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         if self.values[0] == "none":
             return
+        try:
+            self.view.selected_id = int(self.values[0])
+        except Exception:
+            pass
         listing = db.market_get(int(self.values[0]))
         if listing is None:
             await interaction.response.send_message("❌ That listing just sold!", ephemeral=True)
@@ -1942,8 +1924,7 @@ class MarketBrowser(discord.ui.View):
         view = self
 
         async def cb(interaction: discord.Interaction):
-            pop = discord.ui.View(timeout=180)
-            pop.add_item(MarketListingInspectSelect(view.chunk))
+            pop = MarketInspectPopup(interaction.user.id, view.chunk)
             await interaction.response.send_message(
                 content=f"🔍 Inspect - pick a listing ({len(view.chunk)} shown):",
                 view=pop, ephemeral=True)
@@ -1951,6 +1932,80 @@ class MarketBrowser(discord.ui.View):
                                 disabled=disabled)
         btn.callback = cb
         return btn
+
+
+class MarketInspectPopup(discord.ui.View):
+    """Ephemeral pop-up: pick a listing to inspect + Buy button for the picked one."""
+
+    def __init__(self, viewer_id: int, listings: list[dict]):
+        super().__init__(timeout=180)
+        self.viewer_id = viewer_id
+        self.listings = listings
+        self.selected_id = listings[0]["id"] if listings else None
+        self.add_item(MarketListingInspectSelect(listings))
+
+    @discord.ui.button(label="Buy", style=discord.ButtonStyle.green, emoji="🛒")
+    async def buy(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.viewer_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        if not self.selected_id:
+            await interaction.response.send_message("❌ Pick a listing first!", ephemeral=True)
+            return
+        listing = db.market_get(self.selected_id, guild_scope(interaction))
+        if listing is None:
+            await interaction.response.send_message("❌ That listing just sold!", ephemeral=True)
+            return
+        buyer = SUID(interaction, self.viewer_id)
+        u = db.get_user(buyer)
+        if u["balance"] < listing["price"]:
+            await interaction.response.send_message(
+                f"❌ You need ${listing['price']:,} but only have ${u['balance']:,}.",
+                ephemeral=True)
+            return
+        ok, msg = db.market_buy(self.selected_id, buyer, guild_scope(interaction))
+        if not ok:
+            await interaction.response.send_message(f"❌ {msg}", ephemeral=True)
+            return
+        db.grant_achievement(listing["seller_id"], "merchant")
+        if listing["rarity"] == "DIH":
+            db.grant_achievement(listing["seller_id"], "supplier")
+        check_achievements(listing["seller_id"], db.get_user(listing["seller_id"]), "", "")
+        buyer_name = await display_name(interaction, buyer)
+        db.add_mail(listing["seller_id"],
+                    f"💰 **{buyer_name}** bought your **{listing['ore']} ({listing['quality']})** "
+                    f"for **${listing['price']:,}**!")
+        bu = db.get_user(buyer)
+        _bump_obtained(buyer, bu, listing["rarity"], listing["quality"])
+        db.grant_achievement(buyer, "customer")
+        newly = check_achievements(buyer, db.get_user(buyer), listing["rarity"], listing["quality"])
+        if listing["rarity"] == "DIH" and db.grant_achievement(buyer, "investor"):
+            newly.append(f"🏆 **{config.ACHIEVEMENTS['investor'][0]}** - {config.ACHIEVEMENTS['investor'][1]}")
+        # rarest buy tracking
+        try:
+            qualities = list(config.QUALITIES.keys())
+            bu2 = db.get_user(buyer)
+            new_idx = (config.tier_index(listing["rarity"]), qualities.index(listing["quality"]))
+            cur = parse_best(bu2.get("rarest_buy", ""))
+            cur_idx = (config.tier_index(cur[0]), qualities.index(cur[1])) if cur else (-1, -1)
+            if new_idx > cur_idx:
+                db.update_user(buyer, rarest_buy=f"{listing['rarity']}|{listing['quality']}|{listing['ore']}")
+        except Exception:
+            pass
+        button.disabled = True
+        try:
+            result = await interaction.response.send_message(
+                f"✅ {interaction.user.mention} bought **{listing['quality']} {listing['ore']}** "
+                f"for **${listing['price']:,}**!")
+        except Exception:
+            result = None
+        try:
+            if result is not None:
+                await interaction.message.edit(view=self)
+        except Exception:
+            pass
+        if newly:
+            await achievement_reply(interaction, interaction.user.mention, newly)
 
     async def _flip(self, interaction: discord.Interaction, delta: int):
         if interaction.user.id != self.owner_id:
@@ -3577,10 +3632,9 @@ class GiftMoneyView(discord.ui.View):
         db.update_user(r, balance=ru["balance"] + self.amount)
         newly = check_achievements(r, db.get_user(r), "", "")
         giver_name = await display_name(interaction, g)
-        mail_text = f"🎁 **{giver_name}** gifted you **${self.amount:,}**!"
+        db.add_mail(r, f"🎁 **{giver_name}** gifted you **${self.amount:,}**!")
         if newly:
-            mail_text += "\n" + format_achievements(newly)
-        db.add_mail(r, mail_text)
+            db.add_mail(r, format_achievements(newly))
         button.disabled = True
         await interaction.response.edit_message(
             content=f"🎁 Sent **${self.amount:,}** to **{self.recip_name}**!", embed=None, view=self)
