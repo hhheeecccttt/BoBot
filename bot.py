@@ -3221,6 +3221,25 @@ class NukeConfirmView(discord.ui.View):
             child.disabled = True
         await interaction.response.edit_message(content="Phew. Cancelled - nothing was touched.",
                                                 embed=None, view=self)
+@bot.tree.command(name="admin_help", description="[ADMIN] List admin commands.")
+async def admin_help(interaction: discord.Interaction):
+    if not is_admin(interaction):
+        await interaction.response.send_message("❌ Admins only!", ephemeral=True)
+        return
+    await interaction.response.send_message(
+        "🛠️ **Admin Commands**\n"
+        "🎉 `/admin_event_give @user $amount [description]` - event prize + Winner\n"
+        "💰 `/admin_give @user $amount` - give money (no Winner)\n"
+        "💸 `/admin_take @user $amount` - remove money\n"
+        "🏆 `/admin_ach_add @user <id or name>` - grant achievement\n"
+        "🗑️ `/admin_ach_remove @user <id or name>` - remove achievement\n"
+        "🎰 `/admin_spins <per_day> <max_at_once>` - spin limits (`-1` = unlimited)\n"
+        "🔒 `/admin_disable` / `/admin_enable` - emergency kill switch\n"
+        "☢️ `/admin_nuke` - FACTORY RESET everything\n"
+        "❓ `/admin_help` - this message",
+        ephemeral=True)
+
+
 @bot.tree.command(name="admin_spins", description="[ADMIN] Set spins per day and max per /spin.")
 @app_commands.describe(per_day="Spins per day (number, or -1 for unlimited)",
                        max_at_once="Max per /spin call (number or 'infinite' = 100000)")
