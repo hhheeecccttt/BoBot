@@ -742,7 +742,7 @@ class InvBrowser(discord.ui.View):
         return f"{self.guild}:{self.target_id}"
 
     def _inv(self) -> bool:
-        return self.source in ("inv", "gift", "trade")
+        return self.source in ("inv", "gift", "trade", "list")
 
     def _data_inv(self) -> bool:
         """True if rows come from inventory (gift-from-vault reads vault)."""
@@ -2439,32 +2439,84 @@ async def display_name(interaction: discord.Interaction, user_id: str) -> str:
         return f"User {uid}"
 
 
-@bot.tree.command(name="baltop", description="Top 10 richest players.")
-async def baltop(interaction: discord.Interaction):
+@bot.tree.command(name="leaderboard", description="Top 10 richest players.")
+async def leaderboard(interaction: discord.Interaction):
     await interaction.response.defer()
-    gid = guild_scope(interaction)
-    top = db.top_balances(gid, 10)
-    if not top:
-        await interaction.followup.send("📭 Nobody has any money yet! Use `/spin` then `/quicksell`.")
-        return
-    medals = ["🥇", "🥈", "🥉"]
-    lines = []
-    top_ids = set()
-    # resolve names concurrently (each can cost an API call)
-    import asyncio as _aio
-    names = await _aio.gather(*[display_name(interaction, row["user_id"]) for row in top])
-    for i, row in enumerate(top):
-        top_ids.add(row["user_id"])
-        medal = medals[i] if i < 3 else f"`#{i+1}`"
-        lines.append(f"{medal} **{names[i]}** - **${row['balance']:,}** ({row['total_spins']} spins)")
-    # If the caller isn't on the board, show their placement relative to everyone
-    uid = SUID(interaction)
-    if uid not in top_ids:
-        rank = db.get_rank(gid, uid)
-        u = db.get_user(uid)
-        name = await display_name(interaction, uid)
-        lines.append(f"\n`#{rank}` **{name}** - **${u['balance']:,}** ({u['total_spins']} spins)")
-    await interaction.followup.send("💰 **Richest Players**\n" + "\n".join(lines))
+    view = LeaderboardView(interaction.user.id, guild_scope(interaction))
+    embed = await view.make_embed(interaction)
+    await interaction.followup.send(embed=embed, view=view)
+
+
+class LeaderboardView(discord.ui.View):
+    """Page 1: richest. Page 2: most spins."""
+
+    def __init__(self, owner_id: int, guild: str):
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+        self.guild = guild
+        self.page = 0
+
+    async def make_embed(self, interaction: discord.Interaction) -> discord.Embed:
+        import asyncio as _aio
+        medals = ["🥇", "🥈", "🥉"]
+        if self.page == 0:
+            top = db.top_balances(self.guild, 10)
+            if not top:
+                return discord.Embed(title="💰 Richest Players",
+                                     description="📭 Nobody has any money yet!",
+                                     color=0xFFD700)
+            names = await _aio.gather(*[display_name(interaction, r["user_id"]) for r in top])
+            lines, top_ids = [], set()
+            for i, row in enumerate(top):
+                top_ids.add(row["user_id"])
+                medal = medals[i] if i < 3 else f"`#{i+1}`"
+                lines.append(f"{medal} **{names[i]}** - **${row['balance']:,}**")
+            uid = f"{self.guild}:{interaction.user.id}"
+            if uid not in top_ids:
+                rank = db.get_rank(self.guild, uid)
+                u = db.get_user(uid)
+                name = await display_name(interaction, uid)
+                lines.append(f"\n`#{rank}` **{name}** - **${u['balance']:,}**")
+            embed = discord.Embed(title="💰 Richest Players", description="\n".join(lines),
+                                  color=0xFFD700)
+        else:
+            top = db.top_spinners(self.guild, 10)
+            if not top:
+                return discord.Embed(title="🎰 Most Spins",
+                                     description="📭 Nobody has spun yet!",
+                                     color=0x9E9E9E)
+            names = await _aio.gather(*[display_name(interaction, r["user_id"]) for r in top])
+            lines, top_ids = [], set()
+            for i, row in enumerate(top):
+                top_ids.add(row["user_id"])
+                medal = medals[i] if i < 3 else f"`#{i+1}`"
+                lines.append(f"{medal} **{names[i]}** - **{row['total_spins']:,}** spins")
+            uid = f"{self.guild}:{interaction.user.id}"
+            if uid not in top_ids:
+                rank = db.get_spins_rank(self.guild, uid)
+                u = db.get_user(uid)
+                name = await display_name(interaction, uid)
+                lines.append(f"\n`#{rank}` **{name}** - **{u['total_spins']:,}** spins")
+            embed = discord.Embed(title="🎰 Most Spins", description="\n".join(lines),
+                                  color=0x9E9E9E)
+        embed.set_footer(text=f"Page {self.page + 1}/2")
+        return embed
+
+    async def _turn(self, interaction: discord.Interaction, delta: int):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Run `/leaderboard` yourself to browse!",
+                                                    ephemeral=True)
+            return
+        self.page = (self.page + delta) % 2
+        await interaction.response.edit_message(embed=await self.make_embed(interaction), view=self)
+
+    @discord.ui.button(emoji="◀", style=discord.ButtonStyle.secondary, row=1)
+    async def prev(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._turn(interaction, -1)
+
+    @discord.ui.button(emoji="▶", style=discord.ButtonStyle.secondary, row=1)
+    async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._turn(interaction, 1)
 
 
 @bot.tree.command(name="help", description="Show every command.")
@@ -2472,7 +2524,7 @@ async def help_cmd(interaction: discord.Interaction):
     await interaction.response.send_message(
         "🤖 **BoBot Commands**\n"
         "🎰 `/spin [amount]` - roll ores\n"
-        "💰 `/baltop` - top 10 richest players\n"
+        "💰 `/leaderboard` - richest + most spins (paged)\n"
         "💵 `/balance [@user]` - balance, assets, bank + transfer\n"
         "🏦 `/bank [@user]` - bank + withdraw\n"
         "🎒 `/inventory [@user]` - ores, ore pages, quicksell/vault\n"
@@ -3363,7 +3415,12 @@ class ScopeGiftModal(discord.ui.Modal, title="Gift - how many?"):
         result_msg = await interaction.followup.send(
             f"🎁 Gifted **{moved}x** {what} to **{recip_name}**!", ephemeral=True)
         if newly2:
-            await achievement_reply(interaction, f"<@{r}>", newly2, ref_message=result_msg)
+            # achievements go to the recipient's mail, not a reply
+            names = []
+            for line in newly2:
+                m = line.split("**")
+                names.append(m[1] if len(m) > 1 else line)
+            db.add_mail(r, "🏆 Achievements unlocked: " + ", ".join(f"**{n}**" for n in names))
 
 
 gift_group = app_commands.Group(name="gift", description="Gift ores or money.")

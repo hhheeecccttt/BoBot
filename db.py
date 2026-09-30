@@ -1011,3 +1011,25 @@ def get_rank(guild_id: str, user_id: str) -> int:
             "SELECT COUNT(*) c FROM users WHERE user_id LIKE ? AND balance > ?",
             (f"{guild_id}:%", row["balance"],)).fetchone()
         return higher["c"] + 1
+
+
+def top_spinners(guild_id: str, limit: int = 10) -> list[dict]:
+    with _lock, get_conn() as conn:
+        rows = conn.execute(
+            "SELECT user_id, total_spins, balance FROM users WHERE user_id LIKE ? "
+            "ORDER BY total_spins DESC, balance DESC LIMIT ?",
+            (f"{guild_id}:%", limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_spins_rank(guild_id: str, user_id: str) -> int:
+    """1-based rank by total spins within the server."""
+    with _lock, get_conn() as conn:
+        row = conn.execute("SELECT total_spins FROM users WHERE user_id=?", (user_id,)).fetchone()
+        if row is None:
+            return -1
+        higher = conn.execute(
+            "SELECT COUNT(*) c FROM users WHERE user_id LIKE ? AND total_spins > ?",
+            (f"{guild_id}:%", row["total_spins"],)).fetchone()
+        return higher["c"] + 1

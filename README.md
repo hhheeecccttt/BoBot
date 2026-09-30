@@ -48,7 +48,7 @@ python3 bot.py
 | `/achievements [@user]` | Badges (paged, filterable) |
 | `/odds` | Rarities, odds, quicksell values |
 | `/ores` | Browse every ore tier by tier |
-| `/baltop` | Top 10 richest players (no pings, shows your rank) |
+| `/leaderboard` | Richest + most spins, paged, no pings, shows your rank |
 | `/balance` | Balance, assets, bank + transfer button |
 | `/bank [@user]` | Bank balance + withdraw |
 | `/vault [@user]` | Long-term storage (no quicksell) |
