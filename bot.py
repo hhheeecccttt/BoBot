@@ -655,7 +655,8 @@ class StackInspectView(discord.ui.View):
     """Ephemeral pop-up holding an inspect dropdown (opened via Inspect button)."""
 
     def __init__(self, viewer_id: int, target_id: int, source: str,
-                 stacks: list[dict], public: bool, guild: str = "DM", inv: bool = True):
+                 stacks: list[dict], public: bool, guild: str = "DM", inv: bool = True,
+                 list_mode: bool = False, bview=None, browser_message=None):
         super().__init__(timeout=180)
         self.viewer_id = viewer_id
         self.target_id = target_id
@@ -664,11 +665,74 @@ class StackInspectView(discord.ui.View):
         self.guild = guild
         self._inv = inv
         self.selected = None
+        self.list_mode = list_mode
+        self.bview = bview
+        self.browser_message = browser_message
         if stacks:
             self.add_item(BrowserInspectSelect(stacks))
+        if list_mode:
+            self.add_item(self._list_btn())
+
+    def _list_btn(self):
+        view = self
+
+        async def cb(interaction: discord.Interaction):
+            if interaction.user.id != view.viewer_id:
+                await interaction.response.send_message("That's not yours!", ephemeral=True)
+                return
+            sel = view.selected
+            if not sel or len(sel) != 3:
+                try:
+                    first_opt = view.children[0].options[0]
+                    sel = tuple(first_opt.value.split("|", 2)) if first_opt.value != "none" else None
+                except Exception:
+                    sel = None
+            if not sel:
+                await interaction.response.send_message("❌ Pick a stack first!", ephemeral=True)
+                return
+            rarity, quality, ore = sel
+            await interaction.response.send_modal(
+                ListAmountModal(view.viewer_id, ore, quality, rarity,
+                                bview=view.bview, browser_message=view.browser_message))
+        btn = discord.ui.Button(label="List this", style=discord.ButtonStyle.green, emoji="📋")
+        btn.callback = cb
+        return btn
+        if list_mode:
+            self.add_item(self._list_btn())
+        if list_mode:
+            self.add_item(self._list_btn())
 
     def _data_inv(self) -> bool:
         return self._inv
+
+    def _list_btn(self):
+        view = self
+
+        async def cb(interaction: discord.Interaction):
+            if interaction.user.id != view.viewer_id:
+                await interaction.response.send_message("That's not yours!", ephemeral=True)
+                return
+            sel = view.selected
+            if not sel or len(sel) != 3:
+                # default to first shown stack
+                sel = None
+                try:
+                    first_opt = view.children[0].options[0]
+                    if first_opt.value != "none":
+                        sel = tuple(first_opt.value.split("|", 2))
+                except Exception:
+                    pass
+            if not sel:
+                await interaction.response.send_message("❌ Pick a stack first!", ephemeral=True)
+                return
+            rarity, quality, ore = sel
+            tier = next((r for r in config.RARITIES if r == rarity), None)
+            await interaction.response.send_modal(
+                ListAmountModal(view.viewer_id, ore, quality, tier,
+                                bview=view.bview, browser_message=view.browser_message))
+        btn = discord.ui.Button(label="List this", style=discord.ButtonStyle.green, emoji="📋")
+        btn.callback = cb
+        return btn
 
 
 class BrowserInspectSelect(discord.ui.Select):
@@ -695,7 +759,7 @@ class BrowserInspectSelect(discord.ui.Select):
             return
         rarity, quality, ore = self.values[0].split("|", 2)
         s = self.lookup[(rarity, quality, ore)]
-        view.selected = (rarity, quality)
+        view.selected = (rarity, quality, ore)
         scoped = f"{view.guild}:{view.target_id}"
         if view.source == "vault" or not view._data_inv():
             text = vault_inspect_text(scoped, rarity, quality, s["ore"], s["count"])
@@ -806,7 +870,7 @@ class InvBrowser(discord.ui.View):
             title = f"{dot} {self.ore} ({n} ores) (${v:,})"
             lines = []
             for s in stacks:
-                mark = "▶ " if (s["rarity"], s["quality"]) == self.selected else ""
+                mark = "▶ " if (s["rarity"], s["quality"], s["ore"]) == self.selected else ""
                 lines.append(f"{mark}**{s['ore']} ({s['quality']})** x{s['count']}")
             desc = "\n".join(lines) or "Empty!"
         else:
@@ -835,7 +899,7 @@ class InvBrowser(discord.ui.View):
         # inspect button on every UI; grayed unless tier+ore+quality all picked
         if self.ore and stacks:
             if self.selected is None:
-                self.selected = (stacks[0]["rarity"], stacks[0]["quality"])
+                self.selected = (stacks[0]["rarity"], stacks[0]["quality"], stacks[0]["ore"])
             inspect_stacks = stacks
         else:
             all_stacks = [r for r in _scope_targets(f"{self.guild}:{self.target_id}", self.source, None,
@@ -870,11 +934,14 @@ class InvBrowser(discord.ui.View):
                 return
             pop = StackInspectView(view.viewer_id, view.target_id, view.source,
                                    stacks, view.public, guild=view.guild,
-                                   inv=view._data_inv())
+                                   inv=view._data_inv(),
+                                   list_mode=(view.source == "list"),
+                                   bview=view, browser_message=interaction.message)
             await interaction.response.send_message(
                 content=f"🔍 Inspect - pick a stack ({len(stacks)} shown):",
                 view=pop, ephemeral=True)
-        btn = discord.ui.Button(label="Inspect", style=discord.ButtonStyle.secondary, emoji="🔍")
+        btn = discord.ui.Button(label="Inspect", style=discord.ButtonStyle.secondary, emoji="🔍",
+                                disabled=disabled)
         btn.callback = cb
         return btn
 
