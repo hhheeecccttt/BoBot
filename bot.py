@@ -92,11 +92,15 @@ def check_achievements(user_id: str, u: dict, rarity: str, quality: str,
     """Grant eligible achievements. Returns list of newly unlocked names.
     collectors=False skips the (expensive) collector scan - spin passes it once.
     pulled=True only for actual /spin pulls - Pull achievements never fire otherwise."""
-    newly = []
+    try:
+        have = set(db.get_achievements(user_id))
+    except Exception:
+        have = set()
+    eligible: list[str] = []
 
     def grant(aid: str):
-        if db.grant_achievement(user_id, aid):
-            newly.append(f"🏆 **{config.ACHIEVEMENTS[aid][0]}** - {config.ACHIEVEMENTS[aid][1]}")
+        if aid not in have and aid not in eligible:
+            eligible.append(aid)
 
     ts = u["total_spins"]
     if ts >= 1:
@@ -226,10 +230,13 @@ def check_achievements(user_id: str, u: dict, rarity: str, quality: str,
         grant("streak_100")
     if u["streak"] >= 365:
         grant("streak_365")
-    # It's Over: everything else is done (grant() dedupes, so this is safe to check every time)
-    if collectors and len(db.get_achievements(user_id)) == len(config.ACHIEVEMENTS) - 1:
-        grant("all_done")
-    return newly
+    # It's Over: everything else is done
+    if collectors and len(have | set(eligible)) == len(config.ACHIEVEMENTS) - 1:
+        if "all_done" not in have and "all_done" not in eligible:
+            eligible.append("all_done")
+    db.grant_many(user_id, [a for a in eligible if a not in have])
+    return [f"🏆 **{config.ACHIEVEMENTS[aid][0]}** - {config.ACHIEVEMENTS[aid][1]}"
+            for aid in eligible if aid not in have]
 
 
 COLLECTOR_IDS = (
@@ -900,18 +907,26 @@ class InvBrowser(discord.ui.View):
             return self.gift_from != "vault"
         return self._inv()
 
-    # ----- data -----
-    def overviews(self) -> list[dict]:
+    # ----- data (one grouped query per render; overview + totals derived in Python) -----
+    def _grouped_all(self) -> list[dict]:
         if self._data_inv():
-            fn = db.get_ores_by_quality if self.quality else db.get_ores_overview
-            ores = fn(self._t(), self.quality) if self.quality else fn(self._t())
-        else:
-            if self.quality:
-                ores = db.vault_by_quality(self._t(), self.quality)
-            else:
-                ores = db.vault_overview(self._t())
-        if self.tier:
-            ores = [o for o in ores if self.tier in o["rarities"]]
+            return db.get_inventory_grouped(self._t())
+        return db.vault_grouped(self._t())
+
+    def overviews(self, grouped: list[dict] | None = None) -> list[dict]:
+        if grouped is None:
+            grouped = self._grouped_all()
+        by_ore: dict[str, dict] = {}
+        for r in grouped:
+            if self.quality and r["quality"] != self.quality:
+                continue
+            if self.tier and r["rarity"] != self.tier:
+                continue
+            o = by_ore.setdefault(r["ore"], {"ore": r["ore"], "count": 0, "rarities": []})
+            o["count"] += r["count"]
+            if r["rarity"] not in o["rarities"]:
+                o["rarities"].append(r["rarity"])
+        ores = list(by_ore.values())
         ores.sort(key=lambda o: (min(config.tier_index(r) for r in o["rarities"]), -o["count"]))
         return ores
 
@@ -928,23 +943,31 @@ class InvBrowser(discord.ui.View):
             rows = [r for r in rows if r["rarity"] == self.tier]
         return rows
 
-    def totals(self) -> tuple[int, int]:
-        data_source = "vault" if (self.source == "vault" or
-                                  (self.source == "gift" and not self._data_inv())) else "inv"
-        rows = _scope_targets(self._t(), data_source, self.ore, self.quality, self.tier)
-        n = sum(r["count"] for r in rows)
-        v = sum(config.quicksell_value(r["rarity"]) * r["count"] for r in rows)
+    def totals(self, grouped: list[dict] | None = None) -> tuple[int, int]:
+        if grouped is None:
+            grouped = self._grouped_all()
+        n = v = 0
+        for r in grouped:
+            if self.ore and r["ore"] != self.ore:
+                continue
+            if self.quality and r["quality"] != self.quality:
+                continue
+            if self.tier and r["rarity"] != self.tier:
+                continue
+            n += r["count"]
+            v += config.quicksell_value(r["rarity"]) * r["count"]
         return n, v
 
     # ----- render -----
     def render(self):
-        ores = self.overviews()
+        grouped = self._grouped_all()
+        ores = self.overviews(grouped)
         stacks = self.stacks()
         if self.ore and not stacks:
             self.ore, self.selected = None, None
             stacks = []
-            ores = self.overviews()
-        n, v = self.totals()
+            ores = self.overviews(grouped)
+        n, v = self.totals(grouped)
         icon = {"inv": "🎒", "vault": "🗝️", "gift": "🎁", "trade": "🔄", "list": "📦"}.get(
             self.source, "🎒")
         what = {"inv": "Inventory", "vault": "Vault",

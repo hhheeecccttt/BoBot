@@ -12,7 +12,15 @@ _lock = threading.Lock()
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except Exception:
+        pass
     return conn
+
+
+_initialized_paths: set[str] = set()
 
 
 # Every table below is scoped by guild_id: each Discord server gets a fully
@@ -146,6 +154,9 @@ def _ensure_guild_table(conn, table: str, create_ddl: str):
 
 
 def init_db():
+    # schema changes only happen on deploy; skip the ~40 PRAGMA/ALTER probes per command
+    if DB_PATH in _initialized_paths:
+        return
     with _lock, get_conn() as conn:
         for _table, _ddl in (
             ("users", _USERS_DDL), ("inventory", _INVENTORY_DDL), ("vault", _VAULT_DDL),
@@ -243,6 +254,7 @@ def init_db():
         except Exception:
             pass
         conn.commit()
+    _initialized_paths.add(DB_PATH)
 
 # ---------- users ----------
 
@@ -1069,14 +1081,32 @@ def has_achievement(user_id: str, ach_id: str) -> bool:
         return conn.execute("SELECT 1 FROM achievements WHERE user_id=? AND ach_id=?", (user_id, ach_id)).fetchone() is not None
 
 
+def _guild_of(user_id: str) -> str:
+    return user_id.split(":")[0] if ":" in user_id else "DM"
+
+
 def grant_achievement(user_id: str, ach_id: str) -> bool:
     """Returns True if newly unlocked."""
     if has_achievement(user_id, ach_id):
         return False
     with _lock, get_conn() as conn:
-        conn.execute("INSERT OR IGNORE INTO achievements (user_id, ach_id) VALUES (?,?)", (user_id, ach_id))
+        conn.execute("INSERT OR IGNORE INTO achievements (guild_id, user_id, ach_id) VALUES (?,?,?)",
+                     (_guild_of(user_id), user_id, ach_id))
         conn.commit()
         return True
+
+
+def grant_many(user_id: str, ach_ids: list[str]):
+    """Batch grant (single round trip). Already-owned ids are ignored."""
+    ach_ids = [a for a in ach_ids if a]
+    if not ach_ids:
+        return
+    with _lock, get_conn() as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO achievements (guild_id, user_id, ach_id) VALUES (?,?,?)",
+            [(_guild_of(user_id), user_id, aid) for aid in ach_ids],
+        )
+        conn.commit()
 
 
 def get_achievements(user_id: str) -> list[str]:
