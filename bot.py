@@ -1514,7 +1514,7 @@ class BankTransferModal(discord.ui.Modal, title="Bank transfer"):
         else:
             db.update_user(uid, balance=u["balance"] + n,
                            bank_balance=u.get("bank_balance", 0) - n)
-            await interaction.response.send_message(f"💵 Withdrew **${n:,}** to your balance!",
+            await interaction.response.send_message(f"💵 Withdrew **${n:,}** to your wallet!",
                                                     ephemeral=True)
 
 
@@ -1604,7 +1604,7 @@ async def quicksell_all(interaction: discord.Interaction):
     if count >= 100 and db.grant_achievement(uid, "mass_seller"):
         newly.append(f"🏆 **{config.ACHIEVEMENTS['mass_seller'][0]}** - {config.ACHIEVEMENTS['mass_seller'][1]}")
     sync_collectors(uid)
-    result_msg = await interaction.followup.send(f"💸 Sold **{count}** ores for **${earned:,}**! Balance: **${u['balance'] + earned:,}**.")
+    result_msg = await interaction.followup.send(f"💸 Sold **{count}** ores for **${earned:,}**! Wallet: **${u['balance'] + earned:,}**.")
     if newly:
         await achievement_reply(interaction, interaction.user.mention, newly,
                                 ref_message=result_msg)
@@ -1959,8 +1959,8 @@ class MarketListingInspectSelect(discord.ui.Select):
                         f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
                         f"Quicksell value: **${quick:,}**",
             color=0x9C27B0)
-        # public inspect (not private) so anyone can see; buying happens via the Inspect pop-up
-        await interaction.response.send_message(embed=embed, ephemeral=False)
+        # private inspect so only the person who clicked sees it
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 class BuyAmountModal(discord.ui.Modal, title="Buy - how many?"):
@@ -2590,17 +2590,21 @@ class StatsView(discord.ui.View):
             ach_total = len(config.ACHIEVEMENTS)
             _, iv = db.inventory_value(self.target_id)
             _, vv = db.vault_value(self.target_id)
-            assets = iv + vv
+            mv = db.market_assets(self.target_id)
+            bank = u.get("bank_balance", 0)
+            networth = u["balance"] + bank + iv + vv + mv
             embed = discord.Embed(title=f"📊 {self.target_name}'s Stats", color=0x00BCD4)
             embed.description = (
                 f"🎰 Total spins: **{u['total_spins']}**\n"
                 f"🪨 Low Tier: **{u['low_pulls']}** | 💚 Mid Tier: **{u['mid_pulls']}** | 💎 High Tier: **{u['high_pulls']}**\n"
                 f"👑 Elite Tier: **{u['elite_pulls']}** | 🌟 Mythical Tier: **{u['dih_pulls']}**\n"
                 f"🔥 Streak: **{u['streak']}** days (best: **{u['longest_streak']}**)\n"
-                f"💰 Balance: **${u['balance']:,}** | Earned: **${u['total_earned']:,}**\n"
-                f"🎒 Inventory: **{inv_count}** ores\n"
-                f"💸 Inventory quicksell value: **${iv:,}**\n"
-                f"💎 Assets (inventory + vault): **${assets:,}**\n"
+                f"💵 Wallet: **${u['balance']:,}** | Earned: **${u['total_earned']:,}**\n"
+                f"🏦 Bank: **${bank:,}**\n"
+                f"🎒 Inventory: **{inv_count}** ores (**${iv:,}** assets)\n"
+                f"🗝️ Vault assets: **${vv:,}**\n"
+                f"🏪 Market assets: **${mv:,}**\n"
+                f"💎 Net worth: **${networth:,}**\n"
                 f"🏆 Achievements: **{ach_n}/{ach_total}**")
         elif self.page == 1:
             embed = await self._best_embed(interaction, "✨ Rarest spun",
@@ -3150,14 +3154,15 @@ def user_time_until_reset(uid: str) -> str:
 
 SETTING_DEFS = [
     ("inventory", "inv_public", "🎒 Inventory"),
-    ("achievements", "ach_public", "🏆 Achievements"),
-    ("stats", "stats_public", "📊 Stats"),
     ("vault", "vault_public", "🗝️ Vault"),
-    ("bank", "bank_public", "🏦 Bank"),
-    ("balance", "balance_public", "💵 Balance"),
-    ("mail", "mail_public", "📬 Mail"),
     ("ores", "ores_public", "⛏️ Ores"),
+    ("wallet", "balance_public", "💵 Wallet"),
+    ("bank", "bank_public", "🏦 Bank"),
     ("networth", "networth_public", "💎 Net Worth"),
+    ("stats", "stats_public", "📊 Stats"),
+    ("achievements", "ach_public", "🏆 Achievements"),
+    ("mail", "mail_public", "📬 Mail"),
+    ("timezone", "timezone", "🕐 Timezone"),
 ]
 
 
@@ -3259,7 +3264,7 @@ class SettingsView(discord.ui.View):
         self._rebuild()
 
 
-@bot.tree.command(name="settings", description="Privacy settings (inventory, achievements, stats).")
+@bot.tree.command(name="settings", description="Privacy + timezone settings.")
 async def settings(interaction: discord.Interaction):
     uid = SUID(interaction)
     view = SettingsView(interaction.user.id, uid, db.get_user(uid).get("timezone", "UTC"))
@@ -3973,10 +3978,10 @@ async def gift_ore(interaction: discord.Interaction, user: discord.User, source:
     await interaction.followup.send(embed=view.render(), view=view, ephemeral=True)
 
 
-@gift_group.command(name="money", description="Gift money from balance or bank.")
+@gift_group.command(name="money", description="Gift money from wallet or bank.")
 @app_commands.describe(user="Who gets the money", amount="How much ($)",
-                       source="Take it from balance or bank")
-@app_commands.choices(source=[app_commands.Choice(name="Balance", value="balance"),
+                       source="Take it from wallet or bank")
+@app_commands.choices(source=[app_commands.Choice(name="Wallet", value="balance"),
                               app_commands.Choice(name="Bank", value="bank")])
 async def gift_money(interaction: discord.Interaction, user: discord.User,
                      amount: app_commands.Range[int, 1, 100_000_000], source: str):
