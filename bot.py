@@ -1019,6 +1019,18 @@ class InvBrowser(discord.ui.View):
             if interaction.user.id != view.viewer_id:
                 await interaction.response.send_message("That's not yours!", ephemeral=True)
                 return
+            if len(stacks) == 1:
+                # single stack: show it directly, no picker needed
+                s = stacks[0]
+                scoped = f"{view.guild}:{view.target_id}"
+                if view.source == "vault" or not view._data_inv():
+                    text = vault_inspect_text(scoped, s["rarity"], s["quality"],
+                                              s["ore"], s["count"])
+                else:
+                    text = await inspect_text(interaction, scoped, s["rarity"], s["quality"],
+                                              s["ore"], s["count"])
+                await interaction.response.send_message(text, ephemeral=not view.public)
+                return
             pop = StackInspectView(view.viewer_id, view.target_id, view.source,
                                    stacks, view.public, guild=view.guild,
                                    inv=view._data_inv(),
@@ -2916,26 +2928,27 @@ async def help_cmd(interaction: discord.Interaction):
     await interaction.response.send_message(
         "🤖 **BoBot Commands**\n"
         "🎰 `/spin [amount]` - roll ores\n"
-        "💰 `/leaderboard` - money + spins + net worth\n"
-        "💵 `/wallet [@user]` - wallet money\n"
-        "🏦 `/bank [@user]` - bank + withdraw\n"
-        "🎒 `/inventory [@user]` - ores, ore pages, quicksell/vault\n"
-        "🗝️ `/vault [@user]` - long-term storage + un-vault\n"
-        "💸 `/quicksell_all` - sell everything instantly\n"
-        "📦 `/market_list` - list an ore (dropdown picker)\n"
-        "🏪 `/market_view` - browse, filter, inspect & buy\n"
-        "🚫 `/market_cancel` - take down a listing (dropdowns + button)\n"
+        "🎒 `/inventory [@user]` - browse ores, inspect, quicksell, vault\n"
+        "🗝️ `/vault [@user]` - long-term storage, un-vault\n"
+        "💸 `/quicksell_all` - sell your entire inventory instantly\n"
+        "📦 `/market_list` - list ores (amount + price)\n"
+        "🏪 `/market_view` - browse, filter, inspect, buy\n"
+        "🚫 `/market_cancel` - take down listings\n"
         "🚫 `/market_cancel_all` - take down ALL listings\n"
         "🔄 `/trade @user` - trade ores (one-sided OK, both accept)\n"
         "🎁 `/gift ore @user` - gift ores (they get mail)\n"
-        "🎁 `/gift money @user` - gift balance/bank money\n"
-        "📊 `/stats [@user]` - 3 pages: stats, rarest spin, rarest buy\n"
-        "🏆 `/achievements [@user]` - badges (paged + filter)\n"
-        "🎲 `/odds` - rarities, odds, values\n"
-        "⛏️ `/ores` - browse every ore by tier\n"
+        "🎁 `/gift money @user` - gift wallet/bank money\n"
+        "💵 `/wallet [@user]` - wallet money\n"
+        "🏦 `/bank [@user]` - bank + Deposit / Withdraw\n"
+        "💎 `/networth [@user]` - wallet + bank + all assets\n"
+        "💰 `/leaderboard` - money, spins + net worth boards\n"
+        "📊 `/stats [@user]` - stats, rarest spin, rarest buy\n"
+        "🏆 `/achievements [@user]` - badges (yours + global)\n"
+        "🎲 `/odds` - rarity odds + values\n"
+        "⛏️ `/ores [@user]` - every ore with your checkmarks\n"
         "📬 `/mail [@user]` - notifications\n"
-        "⚙️ `/settings` - privacy settings\n"
-        "❓ `/faq` - how quicksell/market/spins work\n"
+        "⚙️ `/settings` - privacy + timezone\n"
+        "❓ `/faq` - game guide (coming soon)\n"
         "❓ `/help` - this message",
         ephemeral=True,
     )

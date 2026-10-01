@@ -34,29 +34,30 @@ python3 bot.py
 
 | Command | What it does |
 |---|---|
-| `/spin [amount]` | Roll ores (up to 1000/call); summary for multi-spins |
-| `/inventory [@user]` | Unified browser: All ores, quality filter, inspect, scoped quicksell/vault |
+| `/spin [amount]` | Roll ores (up to 100000/call); summary for multi-spins |
+| `/inventory [@user]` | Browser: tier/ore/quality, inspect, quicksell, vault |
 | `/quicksell_all` | Sell everything (batched, instant even for 30k) |
-| `/market_list` | Pick an ore from a dropdown, set a price in the popup |
-| `/market_view` | Latest + dropdown filters (ore → quality → cheapest/average/priciest), pages, inspect + Buy button |
-| `/market_cancel` | Your latest 10 + dropdowns (ore → quality → pick + button) |
+| `/market_list` | Browser + List this (amount + price popup) |
+| `/market_view` | Tier/ore/quality/sort filters, pages, inspect + Buy |
+| `/market_cancel` | Same browser with Cancel button |
 | `/market_cancel_all` | Cancel every listing, items return to you |
 | `/trade @player` | Trade ores (one-sided OK, both accept) |
 | `/gift ore @player` | Gift ores (they get mail) |
 | `/gift money @player` | Gift balance/bank money (confirm UI) |
-| `/stats [@user]` | Spins, pulls, streak, balance, assets, rarest spin/buy, achievement count |
-| `/achievements [@user]` | Badges (paged, filterable) |
+| `/stats [@user]` | Stats + rarest spin/buy inspects (dropdown pages) |
+| `/achievements [@user]` | Yours + global boards |
 | `/odds` | Rarities, odds, quicksell values |
-| `/ores` | Browse every ore tier by tier |
+| `/ores [@user]` | Every ore with your checkmarks |
 | `/leaderboard` | Money, spins + net worth boards |
 | `/wallet [@user]` | Wallet money |
 | `/networth [@user]` | Wallet + bank + inventory/vault/market assets |
-| `/bank [@user]` | Bank balance + withdraw |
-| `/vault [@user]` | Long-term storage (no quicksell) |
+| `/bank [@user]` | Bank + Deposit / Withdraw |
+| `/vault [@user]` | Long-term storage + un-vault |
 | `/mail [@user]` | Sale + gift notifications (paged) |
-| `/settings` | Privacy: inventory / achievements / stats / vault / bank / balance / mail / market |
-| `/faq` | How quicksell, market, spins work |
-| `/help` | List of every command |
+| `/settings` | Privacy + timezone |
+| `/faq` | Coming soon |
+| `/help` | This list (private) |
+| Admin: `/admin_event_give`, `/admin_give`, `/admin_take`, `/admin_ach_add`, `/admin_ach_remove`, `/admin_disable`, `/admin_enable`, `/admin_spins`, `/admin_nuke`, `/admin_help` | Events + emergencies |
 | Admin: `/admin_event_give`, `/admin_give`, `/admin_take`, `/admin_ach_add`, `/admin_ach_remove`, `/admin_disable`, `/admin_enable`, `/admin_spins` | Events + emergencies |
 
 ## Values / odds (from your spec)
