@@ -308,7 +308,8 @@ async def achievement_reply(interaction: discord.Interaction, mention: str,
 # ---------- spin view (quicksell button) ----------
 
 class SpinView(discord.ui.View):
-    def __init__(self, owner_id: int, item_id: int, rarity: str, quality: str, ore: str):
+    def __init__(self, owner_id: int, item_id: int, rarity: str, quality: str, ore: str,
+                 guild: str = "DM"):
         super().__init__(timeout=300)
         self.owner_id = owner_id
         self.item_id = item_id
@@ -316,28 +317,8 @@ class SpinView(discord.ui.View):
         self.quality = quality
         self.ore = ore
         self.sold = False
-
-    @discord.ui.button(label="", style=discord.ButtonStyle.green, emoji="💸")
-    async def quicksell(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("That's not your spin!", ephemeral=True)
-            return
-        if self.sold:
-            await interaction.response.send_message("Already sold!", ephemeral=True)
-            return
-        removed = db.remove_item_by_id(SUID(interaction, self.owner_id), self.item_id)
-        if removed is None:
-            await interaction.response.send_message("Item already gone (sold/listed?).", ephemeral=True)
-            return
-        value = config.quicksell_value(self.rarity)
-        u = db.get_user(SUID(interaction, self.owner_id))
-        db.update_user(SUID(interaction, self.owner_id), balance=u["balance"] + value,
-                       total_earned=u["total_earned"] + value)
-        self.sold = True
-        button.disabled = True
-        button.label = f"Sold for ${value:,}"
-        await interaction.response.edit_message(view=self)
-        await interaction.followup.send(f"💸 Quicksold **{self.quality} {self.ore}** for **${value:,}**!", ephemeral=True)
+        self.guild = guild
+        self.quicksell.label = f"Quicksell ${config.quicksell_value(rarity):,}"
 
     @discord.ui.button(label="Spin Again", style=discord.ButtonStyle.primary, emoji="🎰")
     async def again(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -373,8 +354,8 @@ class SpinView(discord.ui.View):
         embed.set_footer(text=f"🔥 {u['streak']}-day streak • {interaction.user.display_name}")
         if rarity == "Mythical":
             embed.add_field(name="🌟", value="**MYTHICAL TIER PULL!!** Insane luck.", inline=False)
-        view = SpinView(interaction.user.id, item_id, rarity, quality, ore)
-        view.children[0].label = f"Quicksell ${value:,}"
+        view = SpinView(interaction.user.id, item_id, rarity, quality, ore,
+                          guild=guild_scope(interaction))
         result_msg = await interaction.followup.send(content=await _spin_ping(uid, interaction),
                                                      embed=embed, view=view)
         newly = check_achievements(uid, db.get_user(uid), rarity, quality, pulled=True)
@@ -382,8 +363,39 @@ class SpinView(discord.ui.View):
             await achievement_reply(interaction, interaction.user.mention, newly,
                                     ref_message=result_msg)
 
+    @discord.ui.button(label="Inspect", style=discord.ButtonStyle.secondary, emoji="🔍")
+    async def inspect(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("That's not your spin!", ephemeral=True)
+            return
+        pop = StackInspectView(self.owner_id, SUID(interaction, self.owner_id), "inv",
+                               [{"rarity": self.rarity, "quality": self.quality,
+                                 "ore": self.ore, "count": 1}],
+                               False, guild=self.guild)
+        await interaction.response.send_message(
+            content="🔍 Inspect - pick a stack (1 shown):", view=pop, ephemeral=True)
 
-# ---------- inventory (two levels: ore page -> quality stacks) ----------
+    @discord.ui.button(label="", style=discord.ButtonStyle.green, emoji="💸")
+    async def quicksell(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("That's not your spin!", ephemeral=True)
+            return
+        if self.sold:
+            await interaction.response.send_message("Already sold!", ephemeral=True)
+            return
+        removed = db.remove_item_by_id(SUID(interaction, self.owner_id), self.item_id)
+        if removed is None:
+            await interaction.response.send_message("Item already gone (sold/listed?).", ephemeral=True)
+            return
+        value = config.quicksell_value(self.rarity)
+        u = db.get_user(SUID(interaction, self.owner_id))
+        db.update_user(SUID(interaction, self.owner_id), balance=u["balance"] + value,
+                       total_earned=u["total_earned"] + value)
+        self.sold = True
+        button.disabled = True
+        button.label = f"Sold for ${value:,}"
+        await interaction.response.edit_message(view=self)
+        await interaction.followup.send(f"💸 Quicksold **{self.quality} {self.ore}** for **${value:,}**!", ephemeral=True)# ---------- inventory (two levels: ore page -> quality stacks) ----------
 
 def ore_tier_label(ore: str, rarities: list[str]) -> str:
     """Emerald + [Mid] -> Emerald (Mid Tier)."""
@@ -983,9 +995,8 @@ class InvBrowser(discord.ui.View):
             inspect_stacks = all_stacks or None
         full = bool(self.tier and self.ore and self.quality)
         if inspect_stacks:
-            # list mode: inspect never grayed; elsewhere needs all 3 dropdowns picked
-            gray = False if self.source == "list" else not full
-            self.add_item(self._inspect_btn(inspect_stacks, disabled=gray))
+            # inspect is always clickable everywhere
+            self.add_item(self._inspect_btn(inspect_stacks, disabled=False))
         mine = self.viewer_id == self.target_id
         full = bool(self.tier and self.ore and self.quality)
         if mine:
@@ -1299,8 +1310,8 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
         if rarity == "Mythical":
             embed.add_field(name="🌟", value="**MYTHICAL TIER PULL!!** Insane luck.", inline=False)
         if item_id is not None:
-            view = SpinView(interaction.user.id, item_id, rarity, quality, ore)
-            view.children[0].label = f"Quicksell ${value:,}"
+            view = SpinView(interaction.user.id, item_id, rarity, quality, ore,
+                              guild=guild_scope(interaction))
             result_msg = await interaction.followup.send(content=ping, embed=embed, view=view)
         else:
             result_msg = await interaction.followup.send(content=ping, embed=embed)
@@ -1344,29 +1355,51 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
                                 ref_message=result_msg)
 
 
-@bot.tree.command(name="balance", description="Check money (yours, or a public one).")
-@app_commands.describe(user="Optional: view another player's public balance")
-async def balance(interaction: discord.Interaction, user: discord.User | None = None):
+@bot.tree.command(name="wallet", description="Check wallet money (yours, or a public one).")
+@app_commands.describe(user="Optional: view another player's public wallet")
+async def wallet(interaction: discord.Interaction, user: discord.User | None = None):
     target = user or interaction.user
     tid = SUID(interaction, target.id)
     t = db.get_user(tid)
     public = bool(t.get("balance_public", 0))
     if target.id != interaction.user.id and not public:
         await interaction.response.send_message(
-            f"🔒 **{(await display_name(interaction, tid))}'s** balance is private.", ephemeral=True)
+            f"🔒 **{(await display_name(interaction, tid))}'s** wallet is private.", ephemeral=True)
+        return
+    u = db.get_user(tid)
+    name = await display_name(interaction, tid)
+    embed = discord.Embed(title=f"💵 {name}'s Wallet", color=0x4CAF50)
+    embed.add_field(name="💵 Wallet", value=f"**${u['balance']:,}**", inline=False)
+    embed.set_footer(text=f"Total earned: ${u['total_earned']:,}")
+    await interaction.response.send_message(embed=embed, ephemeral=not public)
+
+
+@bot.tree.command(name="networth", description="Full net worth breakdown.")
+@app_commands.describe(user="Optional: view another player's public net worth")
+async def networth(interaction: discord.Interaction, user: discord.User | None = None):
+    target = user or interaction.user
+    tid = SUID(interaction, target.id)
+    t = db.get_user(tid)
+    public = bool(t.get("balance_public", 0))
+    if target.id != interaction.user.id and not public:
+        await interaction.response.send_message(
+            f"🔒 **{(await display_name(interaction, tid))}'s** net worth is private.",
+            ephemeral=True)
         return
     u = db.get_user(tid)
     _, iv = db.inventory_value(tid)
     _, vv = db.vault_value(tid)
-    assets = iv + vv
+    mv = db.market_assets(tid)
+    bank = u.get("bank_balance", 0)
+    total = u["balance"] + bank + iv + vv + mv
     name = await display_name(interaction, tid)
-    embed = discord.Embed(title=f"💰 {name}'s Balance", color=0x4CAF50)
-    embed.add_field(name="💵 Balance", value=f"**${u['balance']:,}**", inline=True)
-    embed.add_field(name="🎒 Assets", value=f"**${assets:,}**", inline=True)
-    embed.add_field(name="🏦 Bank", value=f"**${u.get('bank_balance', 0):,}**", inline=True)
-    embed.set_footer(text=f"Total earned: ${u['total_earned']:,}")
-    view = BalanceView(interaction.user.id, target.id)
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=not public)
+    embed = discord.Embed(title=f"💎 {name}'s Net Worth: **${total:,}**", color=0x9C27B0)
+    embed.add_field(name="💵 Wallet", value=f"${u['balance']:,}", inline=True)
+    embed.add_field(name="🏦 Bank", value=f"${bank:,}", inline=True)
+    embed.add_field(name="🎒 Inventory assets", value=f"${iv:,}", inline=True)
+    embed.add_field(name="🗝️ Vault assets", value=f"${vv:,}", inline=True)
+    embed.add_field(name="🏪 Market assets", value=f"${mv:,}", inline=True)
+    await interaction.response.send_message(embed=embed, ephemeral=not public)
 
 
 class BankTransferModal(discord.ui.Modal, title="Bank transfer"):
@@ -1413,39 +1446,7 @@ class BankTransferModal(discord.ui.Modal, title="Bank transfer"):
                                                     ephemeral=True)
 
 
-class BalanceView(discord.ui.View):
-    def __init__(self, viewer_id: int, target_id: int):
-        super().__init__(timeout=180)
-        self.viewer_id = viewer_id
-        self.target_id = target_id
-        if viewer_id != target_id:
-            self.to_bank.disabled = True
 
-    @discord.ui.button(label="To bank", style=discord.ButtonStyle.primary, emoji="🏦")
-    async def to_bank(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.viewer_id or self.viewer_id != self.target_id:
-            await interaction.response.send_message("That's not yours!", ephemeral=True)
-            return
-        await interaction.response.send_modal(BankTransferModal(self.viewer_id, "to_bank"))
-
-
-@bot.tree.command(name="bank", description="See banks (yours, or a public one).")
-@app_commands.describe(user="Optional: view another player's public bank")
-async def bank(interaction: discord.Interaction, user: discord.User | None = None):
-    target = user or interaction.user
-    tid = SUID(interaction, target.id)
-    t = db.get_user(tid)
-    public = bool(t.get("bank_public", 0))
-    if target.id != interaction.user.id and not public:
-        await interaction.response.send_message(
-            f"🔒 **{(await display_name(interaction, tid))}'s** bank is private.", ephemeral=True)
-        return
-    t = db.get_user(tid)
-    name = await display_name(interaction, tid)
-    embed = discord.Embed(title=f"🏦 {name}'s Bank", color=0x3F51B5)
-    embed.add_field(name="💰 Stored", value=f"**${t.get('bank_balance', 0):,}**")
-    view = BankView(interaction.user.id, target.id)
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=not public)
 
 
 class BankView(discord.ui.View):
@@ -1462,6 +1463,13 @@ class BankView(discord.ui.View):
             await interaction.response.send_message("That's not yours!", ephemeral=True)
             return
         await interaction.response.send_modal(BankTransferModal(self.viewer_id, "to_balance"))
+
+    @discord.ui.button(label="Deposit", style=discord.ButtonStyle.primary, emoji="🏦")
+    async def deposit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.viewer_id or self.viewer_id != self.target_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        await interaction.response.send_modal(BankTransferModal(self.viewer_id, "to_bank"))
 
 
 @bot.tree.command(name="inventory", description="See inventories (yours, or a public one).")
@@ -2550,28 +2558,6 @@ async def achievements(interaction: discord.Interaction, user: discord.User | No
     await interaction.response.send_message(embed=view.make_embed(), view=view,
                                             ephemeral=not public)
 
-
-class AchievementsFilterSelect(discord.ui.Select):
-    def __init__(self, current: str):
-        super().__init__(placeholder="Show…", options=[
-            discord.SelectOption(label="All", value="all", default=(current == "all")),
-            discord.SelectOption(label="Completed", value="done", default=(current == "done")),
-            discord.SelectOption(label="Incomplete", value="todo", default=(current == "todo")),
-        ], row=1)
-
-    async def callback(self, interaction: discord.Interaction):
-        view: AchievementsView = self.view
-        if interaction.user.id != view.owner_id:
-            await interaction.response.send_message("That's not yours! Run `/achievements` yourself.",
-                                                    ephemeral=True)
-            return
-        view.filter = self.values[0]
-        view.page = 0
-        view.refresh_items()
-        view.sync_select()
-        await interaction.response.edit_message(embed=view.make_embed(), view=view)
-
-
 class AchievementsScopeSelect(discord.ui.Select):
     def __init__(self, current: str):
         super().__init__(placeholder="Whose achievements…", options=[
@@ -2589,6 +2575,7 @@ class AchievementsScopeSelect(discord.ui.Select):
         view.scope = self.values[0]
         view.page = 0
         view.refresh_items()
+        view.sync_select()
         await interaction.response.edit_message(embed=view.make_embed(), view=view)
 
 
@@ -2600,23 +2587,15 @@ class AchievementsView(discord.ui.View):
         self.owner_id = owner_id
         self.unlocked = unlocked
         self.page = 0
-        self.filter = "all"
         self.scope = "mine"
         self.all_items = list(config.ACHIEVEMENTS.items())
         self.items = self.all_items
         self.pages = max(1, (len(self.items) + self.PER_PAGE - 1) // self.PER_PAGE)
         self.scope_select = AchievementsScopeSelect(self.scope)
         self.add_item(self.scope_select)
-        self.filter_select = AchievementsFilterSelect(self.filter)
-        self.add_item(self.filter_select)
 
     def sync_select(self):
-        """Rebuild dropdown options so the shown selection matches the filter."""
-        self.filter_select.options = [
-            discord.SelectOption(label="All", value="all", default=(self.filter == "all")),
-            discord.SelectOption(label="Completed", value="done", default=(self.filter == "done")),
-            discord.SelectOption(label="Incomplete", value="todo", default=(self.filter == "todo")),
-        ]
+        """Rebuild dropdown options so the shown selection matches."""
         self.scope_select.options = [
             discord.SelectOption(label="My Achievements", value="mine",
                                  default=(self.scope == "mine")),
@@ -2631,10 +2610,6 @@ class AchievementsView(discord.ui.View):
                                 key=lambda kv: (-counts.get(kv[0], 0), kv[1][0]))
         else:
             self.items = self.all_items
-        if self.filter == "done":
-            self.items = [(a, v) for a, v in self.items if a in self.unlocked]
-        elif self.filter == "todo":
-            self.items = [(a, v) for a, v in self.items if a not in self.unlocked]
         self.pages = max(1, (len(self.items) + self.PER_PAGE - 1) // self.PER_PAGE)
 
     def make_embed(self) -> discord.Embed:
@@ -2648,15 +2623,14 @@ class AchievementsView(discord.ui.View):
                 mark = "✅" if aid in self.unlocked else "🔒"
                 lines.append(f"{mark} **{name}** - {desc} {pct:.1f}%")
             embed = discord.Embed(
-                title=f"🌍 Global Achievements ({len(self.unlocked)}/{len(self.all_items)})",
+                title=f"🌍 Global Achievements ({len(self.unlocked)}/{len(self.all_items)}) % of players",
                 description="\n".join(lines) if lines else "Nothing here!",
                 color=0xFFD700)
         else:
-            filt = {"all": "", "done": " - completed", "todo": " - incomplete"}[self.filter]
             lines = [f"{'✅' if aid in self.unlocked else '🔒'} **{name}** - {desc}"
                      for aid, (name, desc) in chunk]
             embed = discord.Embed(
-                title=f"🏆 Achievements ({len(self.unlocked)}/{len(self.all_items)}){filt}",
+                title=f"🏆 Achievements ({len(self.unlocked)}/{len(self.all_items)})",
                 description="\n".join(lines) if lines else "Nothing here!",
                 color=0xFFD700)
         embed.set_footer(text=f"Page {self.page + 1}/{self.pages}")
@@ -2742,7 +2716,7 @@ class OresView(discord.ui.View):
             owned = set()
         embed = discord.Embed(
             title=f"{ri['dot']} {config.tier_name(r)} Ores",
-            description="\n".join(f"{'✅' if o in owned else '❌'} **{o}**" for o in config.ORES[r]),
+            description="\n".join(f"{'✅' if o in owned else '🔒'} **{o}**" for o in config.ORES[r]),
             color=ri["color"])
         embed.add_field(name="💰 Quicksell", value=f"${ri['value']:,} each", inline=True)
         embed.add_field(name="📊 Rarity odds",
@@ -2836,6 +2810,8 @@ class LeaderboardBoardSelect(discord.ui.Select):
                                  default=(current == "money")),
             discord.SelectOption(label="Spins", value="spins", emoji="🎰",
                                  default=(current == "spins")),
+            discord.SelectOption(label="Net Worth", value="networth", emoji="💎",
+                                 default=(current == "networth")),
         ])
 
     async def callback(self, interaction: discord.Interaction):
@@ -2844,13 +2820,13 @@ class LeaderboardBoardSelect(discord.ui.Select):
             await interaction.response.send_message("Run `/leaderboard` yourself to browse!",
                                                     ephemeral=True)
             return
-        view.page = 0 if self.values[0] == "money" else 1
+        view.page = {"money": 0, "spins": 1, "networth": 2}[self.values[0]]
         view.sync_board()
         await interaction.response.edit_message(embed=await view.make_embed(interaction), view=view)
 
 
 class LeaderboardView(discord.ui.View):
-    """Page 0: richest. Page 1: most spins. Switched via dropdown."""
+    """Page 0: richest. Page 1: most spins. Page 2: net worth. Switched via dropdown."""
 
     def __init__(self, owner_id: int, guild: str):
         super().__init__(timeout=300)
@@ -2882,7 +2858,7 @@ class LeaderboardView(discord.ui.View):
                 lines.append(f"\n`#{rank}` **{name}** - **${u['balance']:,}**")
             embed = discord.Embed(title="💰 Richest Players", description="\n".join(lines),
                                   color=0xFFD700)
-        else:
+        elif self.page == 1:
             top = db.top_spinners(self.guild, 10)
             if not top:
                 return discord.Embed(title="🎰 Most Spins",
@@ -2902,7 +2878,26 @@ class LeaderboardView(discord.ui.View):
                 lines.append(f"\n`#{rank}` **{name}** - **{u['total_spins']:,}** spins")
             embed = discord.Embed(title="🎰 Most Spins", description="\n".join(lines),
                                   color=0x9E9E9E)
-        embed.set_footer(text=f"Page {self.page + 1}/2")
+        else:
+            top = db.top_networth(self.guild, 10)
+            if not top:
+                return discord.Embed(title="💎 Highest Net Worth",
+                                     description="📭 Nothing to show yet!",
+                                     color=0x9C27B0)
+            names = await _aio.gather(*[display_name(interaction, r["user_id"]) for r in top])
+            lines, top_ids = [], set()
+            for i, row in enumerate(top):
+                top_ids.add(row["user_id"])
+                medal = medals[i] if i < 3 else f"`#{i+1}`"
+                lines.append(f"{medal} **{names[i]}** - **${row['networth']:,}**")
+            uid = f"{self.guild}:{interaction.user.id}"
+            if uid not in top_ids:
+                rank = db.get_networth_rank(self.guild, uid)
+                name = await display_name(interaction, uid)
+                lines.append(f"\n`#{rank}` **{name}** - **${db.net_worth(self.guild, uid):,}**")
+            embed = discord.Embed(title="💎 Highest Net Worth", description="\n".join(lines),
+                                  color=0x9C27B0)
+        embed.set_footer(text=f"Page {self.page + 1}/3")
         return embed
 
     def sync_board(self):
@@ -2911,6 +2906,8 @@ class LeaderboardView(discord.ui.View):
                                  default=(self.page == 0)),
             discord.SelectOption(label="Spins", value="spins", emoji="🎰",
                                  default=(self.page == 1)),
+            discord.SelectOption(label="Net Worth", value="networth", emoji="💎",
+                                 default=(self.page == 2)),
         ]
 
 
@@ -2919,8 +2916,8 @@ async def help_cmd(interaction: discord.Interaction):
     await interaction.response.send_message(
         "🤖 **BoBot Commands**\n"
         "🎰 `/spin [amount]` - roll ores\n"
-        "💰 `/leaderboard` - richest + most spins (paged)\n"
-        "💵 `/balance [@user]` - balance, assets, bank + transfer\n"
+        "💰 `/leaderboard` - money + spins + net worth\n"
+        "💵 `/wallet [@user]` - wallet money\n"
         "🏦 `/bank [@user]` - bank + withdraw\n"
         "🎒 `/inventory [@user]` - ores, ore pages, quicksell/vault\n"
         "🗝️ `/vault [@user]` - long-term storage + un-vault\n"
@@ -3073,6 +3070,7 @@ SETTING_DEFS = [
     ("balance", "balance_public", "💵 Balance"),
     ("mail", "mail_public", "📬 Mail"),
     ("ores", "ores_public", "⛏️ Ores"),
+    ("timezone", "timezone", "🕐 Timezone"),
 ]
 
 

@@ -1086,6 +1086,17 @@ def get_achievements(user_id: str) -> list[str]:
 
 # ---------- leaderboard ----------
 
+def market_assets(seller_id: str) -> int:
+    """Total quicksell value of everything this seller has listed."""
+    import config as _cfg
+    with _lock, get_conn() as conn:
+        rows = conn.execute(
+            "SELECT rarity, COUNT(*) as count FROM market WHERE seller_id=? GROUP BY rarity",
+            (seller_id,),
+        ).fetchall()
+        return sum(_cfg.quicksell_value(r["rarity"]) * r["count"] for r in rows)
+
+
 def top_balances(guild_id: str, limit: int = 10) -> list[dict]:
     with _lock, get_conn() as conn:
         rows = conn.execute(
@@ -1128,3 +1139,45 @@ def get_spins_rank(guild_id: str, user_id: str) -> int:
             "SELECT COUNT(*) c FROM users WHERE user_id LIKE ? AND total_spins > ?",
             (f"{guild_id}:%", row["total_spins"],)).fetchone()
         return higher["c"] + 1
+
+
+def net_worth(guild_id: str, user_id: str) -> int:
+    """Wallet + bank + inventory assets + vault assets + market assets."""
+    import config as _cfg
+    with _lock, get_conn() as conn:
+        u = conn.execute("SELECT balance, bank_balance FROM users WHERE user_id=?",
+                         (user_id,)).fetchone()
+        base = (u["balance"] or 0) + (u["bank_balance"] or 0) if u else 0
+        inv = conn.execute(
+            "SELECT rarity, COUNT(*) as count FROM inventory WHERE user_id=? GROUP BY rarity",
+            (user_id,)).fetchall()
+        vault = conn.execute(
+            "SELECT rarity, COUNT(*) as count FROM vault WHERE user_id=? GROUP BY rarity",
+            (user_id,)).fetchall()
+        mkt = conn.execute(
+            "SELECT rarity, COUNT(*) as count FROM market WHERE seller_id=? GROUP BY rarity",
+            (user_id,)).fetchall()
+    total = base
+    for rows in (inv, vault, mkt):
+        total += sum(_cfg.quicksell_value(r["rarity"]) * r["count"] for r in rows)
+    return total
+
+
+def top_networth(guild_id: str, limit: int = 10) -> list[dict]:
+    with _lock, get_conn() as conn:
+        rows = conn.execute("SELECT user_id FROM users WHERE user_id LIKE ?",
+                            (f"{guild_id}:%",)).fetchall()
+        ids = [r["user_id"] for r in rows]
+    ranked = sorted(((uid, net_worth(guild_id, uid)) for uid in ids),
+                    key=lambda x: -x[1])[:limit]
+    return [{"user_id": uid, "networth": nw} for uid, nw in ranked]
+
+
+def get_networth_rank(guild_id: str, user_id: str) -> int:
+    mine = net_worth(guild_id, user_id)
+    with _lock, get_conn() as conn:
+        rows = conn.execute("SELECT user_id FROM users WHERE user_id LIKE ?",
+                            (f"{guild_id}:%",)).fetchall()
+        ids = [r["user_id"] for r in rows if r["user_id"] != user_id]
+    higher = sum(1 for uid in ids if net_worth(guild_id, uid) > mine)
+    return higher + 1

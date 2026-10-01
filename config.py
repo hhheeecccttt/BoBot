@@ -63,7 +63,7 @@ ACHIEVEMENTS = {
     "spins_100":    ("Locked In", "Reach 100 total spins"),
     "spins_1000":   ("Degenerate", "Reach 1,000 total spins"),
     "spins_3650":   ("One Year", "Reach 3,650 total spins"),
-    "elite_pull":   ("The Mediocre Leagues", "Pull a Elite Tier ore"),
+    "elite_pull":   ("The Mediocre Leagues", "Pull an Elite Tier ore"),
     "dih_pull":     ("The Big Leagues", "Pull a Mythical Tier ore"),
     "dih_3":        ("The Bigger Leagues", "Obtain 3 Mythical Tier ores"),
     "perfect_pull": ("Flawless", "Pull a Perfect condition ore"),
