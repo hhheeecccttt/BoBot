@@ -40,7 +40,7 @@ def roll_quality() -> str:
         cumulative += info["chance"]
         if r < cumulative:
             return name
-    return "Chipped"
+    return "Heavily Chipped"
 
 
 def roll_one() -> tuple[str, str, str]:
@@ -115,9 +115,9 @@ def check_achievements(user_id: str, u: dict, rarity: str, quality: str,
         grant("dih_pull")
         if u.get("dih_pulls", 0) >= 3:
             grant("dih_3")
-        if quality == "Perfect":
+        if quality == "Perfect Condition":
             grant("jackpot")
-    if pulled and quality == "Perfect":
+    if pulled and quality == "Perfect Condition":
         grant("perfect_pull")
         if u.get("perfect_pulls", 0) >= 10:
             grant("perfect_10")
@@ -146,6 +146,72 @@ def check_achievements(user_id: str, u: dict, rarity: str, quality: str,
         grant("merchant_10")
     if u.get("buy_count", 0) >= 10:
         grant("customer_10")
+    if u.get("sell_count", 0) >= 20:
+        grant("merchant_20")
+    if u.get("sell_count", 0) >= 50:
+        grant("merchant_50")
+    if u.get("sell_count", 0) >= 100:
+        grant("merchant_100")
+    if u.get("buy_count", 0) >= 20:
+        grant("customer_20")
+    if u.get("buy_count", 0) >= 50:
+        grant("customer_50")
+    if u.get("buy_count", 0) >= 100:
+        grant("customer_100")
+    if u.get("trade_count", 0) >= 1:
+        grant("trader")
+    if u.get("trade_count", 0) >= 10:
+        grant("trader_10")
+    if u.get("gift_ore_count", 0) >= 1:
+        grant("gifter")
+    if u.get("gift_ore_count", 0) >= 10:
+        grant("gifter_10")
+    if u.get("gift_money_count", 0) >= 1:
+        grant("gifter_money")
+    if u.get("gift_money_count", 0) >= 10:
+        grant("gifter_money_10")
+    if u.get("market_put_count", 0) >= 1:
+        grant("marketer_1")
+    if u.get("market_put_count", 0) >= 3:
+        grant("marketer_3")
+    if u.get("market_put_count", 0) >= 10:
+        grant("marketer_10")
+    if u.get("market_put_count", 0) >= 20:
+        grant("marketer_20")
+    if u.get("market_put_count", 0) >= 50:
+        grant("marketer_50")
+    if u.get("market_put_count", 0) >= 100:
+        grant("marketer_100")
+    try:
+        _guild = user_id.split(":")[0] if ":" in user_id else "DM"
+        if db.get_rank(_guild, user_id) in range(1, 11):
+            grant("moneybags")
+        if db.get_spins_rank(_guild, user_id) in range(1, 11):
+            grant("hard_working")
+    except Exception:
+        pass
+    try:
+        if db.count_inventory(user_id) >= 50:
+            grant("packed")
+        if db.count_inventory(user_id) >= 100:
+            grant("loaded")
+    except Exception:
+        pass
+    try:
+        _vrows = db.vault_grouped(user_id)
+        _vn = sum(r["count"] for r in _vrows)
+        if _vn >= 1:
+            grant("vault_1")
+        if _vn >= 10:
+            grant("vault_10")
+        if any(r["quality"] == "Perfect Condition" for r in _vrows):
+            grant("vault_perfect")
+        if sum(r["count"] for r in _vrows if r["quality"] == "Perfect Condition") >= 10:
+            grant("vault_perfect_10")
+        if any(r["rarity"] == "Mythical" for r in _vrows):
+            grant("vault_mythical")
+    except Exception:
+        pass
     # collectors: own every ore of the tier right now (inventory + vault together)
     if collectors:
         for aid in current_collectors(user_id):
@@ -430,6 +496,10 @@ class ScopeQuicksellModal(discord.ui.Modal, title="Quicksell"):
         u = db.get_user(uid)
         db.update_user(uid, balance=u["balance"] + earned, total_earned=u["total_earned"] + earned)
         newly = check_achievements(uid, db.get_user(uid), "", "")
+        if sold >= 10 and db.grant_achievement(uid, "wholesaler"):
+            newly.append(f"🏆 **{config.ACHIEVEMENTS['wholesaler'][0]}** - {config.ACHIEVEMENTS['wholesaler'][1]}")
+        if sold >= 100 and db.grant_achievement(uid, "mass_seller"):
+            newly.append(f"🏆 **{config.ACHIEVEMENTS['mass_seller'][0]}** - {config.ACHIEVEMENTS['mass_seller'][1]}")
         sync_collectors(uid)
         scope = " ".join(x for x in (self.ore or "", f"({self.quality})" if self.quality else "") if x)
         await self._refresh_browser()
@@ -508,9 +578,13 @@ class ScopeVaultModal(discord.ui.Modal, title="Vault - how many?"):
                     break
             if not store_all and moved >= limit:
                 break
+        vault_newly = check_achievements(uid, db.get_user(uid), "", "") if moved > 0 else []
         await self._refresh_browser()
-        await interaction.followup.send(
+        result_msg = await interaction.followup.send(
             f"🗝️ Stored **{moved}** ore(s) in your vault!", ephemeral=True)
+        if vault_newly:
+            await achievement_reply(interaction, interaction.user.mention, vault_newly,
+                                    ref_message=result_msg)
 
 
 class ScopeUnvaultModal(discord.ui.Modal, title="Un-vault - how many?"):
@@ -1148,7 +1222,7 @@ def _run_spin_batch(uid: str, n: int):
         db.add_many_items(uid, pulls)  # batched
     u = db.get_user(uid)
     counts = {r: sum(1 for p in pulls if p[0] == r) for r in SPIN_ORDER}
-    perfect_n = sum(1 for p in pulls if p[1] == "Perfect")
+    perfect_n = sum(1 for p in pulls if p[1] == "Perfect Condition")
     updates = dict(spins_used_today=u["spins_used_today"] + n, total_spins=u["total_spins"] + n)
     for r in SPIN_ORDER:
         updates[SPIN_KEYS[r]] = u[SPIN_KEYS[r]] + counts[r]
@@ -1425,6 +1499,10 @@ async def quicksell_all(interaction: discord.Interaction):
     u = db.get_user(uid)
     db.update_user(uid, balance=u["balance"] + earned, total_earned=u["total_earned"] + earned)
     newly = check_achievements(uid, db.get_user(uid), "", "")
+    if count >= 10 and db.grant_achievement(uid, "wholesaler"):
+        newly.append(f"🏆 **{config.ACHIEVEMENTS['wholesaler'][0]}** - {config.ACHIEVEMENTS['wholesaler'][1]}")
+    if count >= 100 and db.grant_achievement(uid, "mass_seller"):
+        newly.append(f"🏆 **{config.ACHIEVEMENTS['mass_seller'][0]}** - {config.ACHIEVEMENTS['mass_seller'][1]}")
     sync_collectors(uid)
     result_msg = await interaction.followup.send(f"💸 Sold **{count}** ores for **${earned:,}**! Balance: **${u['balance'] + earned:,}**.")
     if newly:
@@ -1485,6 +1563,14 @@ class ListAmountModal(discord.ui.Modal, title="List ores"):
             return
         await interaction.response.defer(ephemeral=True)
         made = db.market_list_many(gid, uid, targets, price, n)
+        if made > 0:
+            uu = db.get_user(uid)
+            db.update_user(uid, market_put_count=uu.get("market_put_count", 0) + made)
+            newly_put = check_achievements(uid, db.get_user(uid), "", "")
+            if newly_put:
+                await interaction.followup.send(
+                    f"{interaction.user.mention} " + format_achievements(newly_put),
+                    ephemeral=True)
         sync_collectors(uid)
         if self.bview is not None and self.browser_message is not None:
             try:
@@ -1838,6 +1924,9 @@ class BuyAmountModal(discord.ui.Modal, title="Buy - how many?"):
             check_achievements(l["seller_id"], db.get_user(l["seller_id"]), "", "")
             per_seller[l["seller_id"]][0] += 1
             per_seller[l["seller_id"]][1] += l["price"]
+        for l in rows:
+            if l.get("origin") == "market" and l["price"] > config.quicksell_value(l["rarity"]):
+                db.grant_achievement(l["seller_id"], "scalper")
         buyer_name = await display_name(interaction, buyer)
         for sid, (cnt, sub) in per_seller.items():
             db.add_mail(sid, f"💰 **{buyer_name}** bought **{cnt}x {self.ore} ({self.quality})** "
@@ -1847,8 +1936,8 @@ class BuyAmountModal(discord.ui.Modal, title="Buy - how many?"):
         ups = {}
         if any(l["rarity"] == "Mythical" for l in rows):
             ups["dih_pulls"] = bu.get("dih_pulls", 0) + sum(1 for l in rows if l["rarity"] == "Mythical")
-        if any(l["quality"] == "Perfect" for l in rows):
-            ups["perfect_pulls"] = bu.get("perfect_pulls", 0) + sum(1 for l in rows if l["quality"] == "Perfect")
+        if any(l["quality"] == "Perfect Condition" for l in rows):
+            ups["perfect_pulls"] = bu.get("perfect_pulls", 0) + sum(1 for l in rows if l["quality"] == "Perfect Condition")
         if ups:
             db.update_user(buyer, **ups)
         db.grant_achievement(buyer, "customer")
@@ -1989,6 +2078,8 @@ class MarketInspectPopup(discord.ui.View):
         db.grant_achievement(listing["seller_id"], "merchant")
         if listing["rarity"] == "Mythical":
             db.grant_achievement(listing["seller_id"], "supplier")
+        if listing.get("origin") == "market" and listing["price"] > config.quicksell_value(listing["rarity"]):
+            db.grant_achievement(listing["seller_id"], "scalper")
         check_achievements(listing["seller_id"], db.get_user(listing["seller_id"]), "", "")
         buyer_name = await display_name(interaction, buyer)
         db.add_mail(listing["seller_id"],
@@ -2357,6 +2448,25 @@ def parse_best(val: str) -> tuple[str, str, str] | None:
     return None
 
 
+class StatsPageSelect(discord.ui.Select):
+    def __init__(self, current: int):
+        super().__init__(placeholder="Choose page…", options=[
+            discord.SelectOption(label="Stats", value="0", emoji="📊", default=(current == 0)),
+            discord.SelectOption(label="Rarest spin", value="1", emoji="✨", default=(current == 1)),
+            discord.SelectOption(label="Rarest buy", value="2", emoji="🛒", default=(current == 2)),
+        ])
+
+    async def callback(self, interaction: discord.Interaction):
+        view: StatsView = self.view
+        if interaction.user.id != view.viewer_id:
+            await interaction.response.send_message("Run `/stats` yourself to browse!",
+                                                    ephemeral=True)
+            return
+        view.page = int(self.values[0])
+        view.sync_page()
+        await interaction.response.edit_message(embed=await view.make_embed(interaction), view=view)
+
+
 class StatsView(discord.ui.View):
     """3 pages: stats, rarest spun inspect, rarest bought inspect (global bests, kept forever)."""
 
@@ -2366,6 +2476,17 @@ class StatsView(discord.ui.View):
         self.target_id = target_id
         self.target_name = target_name
         self.page = 0
+        self.add_item(StatsPageSelect(self.page))
+
+    def sync_page(self):
+        self.children[0].options = [
+            discord.SelectOption(label="Stats", value="0", emoji="📊",
+                                 default=(self.page == 0)),
+            discord.SelectOption(label="Rarest spin", value="1", emoji="✨",
+                                 default=(self.page == 1)),
+            discord.SelectOption(label="Rarest buy", value="2", emoji="🛒",
+                                 default=(self.page == 2)),
+        ]
 
     async def make_embed(self, interaction: discord.Interaction) -> discord.Embed:
         u = db.get_user(self.target_id)
@@ -2410,21 +2531,6 @@ class StatsView(discord.ui.View):
         return discord.Embed(title=title, description=text,
                              color=config.RARITIES.get(rarity, {}).get("color", 0x9E9E9E))
 
-    async def _turn(self, interaction: discord.Interaction, delta: int):
-        if interaction.user.id != self.viewer_id:
-            await interaction.response.send_message("Run `/stats` yourself to browse!",
-                                                    ephemeral=True)
-            return
-        self.page = (self.page + delta) % 3
-        await interaction.response.edit_message(embed=await self.make_embed(interaction), view=self)
-
-    @discord.ui.button(emoji="◀", style=discord.ButtonStyle.secondary, row=1)
-    async def prev(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._turn(interaction, -1)
-
-    @discord.ui.button(emoji="▶", style=discord.ButtonStyle.secondary, row=1)
-    async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._turn(interaction, 1)
 
 
 @bot.tree.command(name="achievements", description="See achievements (yours, or a public one).")
@@ -2451,7 +2557,7 @@ class AchievementsFilterSelect(discord.ui.Select):
             discord.SelectOption(label="All", value="all", default=(current == "all")),
             discord.SelectOption(label="Completed", value="done", default=(current == "done")),
             discord.SelectOption(label="Incomplete", value="todo", default=(current == "todo")),
-        ], row=0)
+        ], row=1)
 
     async def callback(self, interaction: discord.Interaction):
         view: AchievementsView = self.view
@@ -2466,6 +2572,26 @@ class AchievementsFilterSelect(discord.ui.Select):
         await interaction.response.edit_message(embed=view.make_embed(), view=view)
 
 
+class AchievementsScopeSelect(discord.ui.Select):
+    def __init__(self, current: str):
+        super().__init__(placeholder="Whose achievements…", options=[
+            discord.SelectOption(label="My Achievements", value="mine",
+                                 default=(current == "mine")),
+            discord.SelectOption(label="Global Achievements", value="global",
+                                 default=(current == "global")),
+        ], row=0)
+    async def callback(self, interaction: discord.Interaction):
+        view: AchievementsView = self.view
+        if interaction.user.id != view.owner_id:
+            await interaction.response.send_message("That's not yours! Run `/achievements` yourself.",
+                                                    ephemeral=True)
+            return
+        view.scope = self.values[0]
+        view.page = 0
+        view.refresh_items()
+        await interaction.response.edit_message(embed=view.make_embed(), view=view)
+
+
 class AchievementsView(discord.ui.View):
     PER_PAGE = 10
 
@@ -2475,9 +2601,12 @@ class AchievementsView(discord.ui.View):
         self.unlocked = unlocked
         self.page = 0
         self.filter = "all"
+        self.scope = "mine"
         self.all_items = list(config.ACHIEVEMENTS.items())
         self.items = self.all_items
         self.pages = max(1, (len(self.items) + self.PER_PAGE - 1) // self.PER_PAGE)
+        self.scope_select = AchievementsScopeSelect(self.scope)
+        self.add_item(self.scope_select)
         self.filter_select = AchievementsFilterSelect(self.filter)
         self.add_item(self.filter_select)
 
@@ -2488,25 +2617,48 @@ class AchievementsView(discord.ui.View):
             discord.SelectOption(label="Completed", value="done", default=(self.filter == "done")),
             discord.SelectOption(label="Incomplete", value="todo", default=(self.filter == "todo")),
         ]
+        self.scope_select.options = [
+            discord.SelectOption(label="My Achievements", value="mine",
+                                 default=(self.scope == "mine")),
+            discord.SelectOption(label="Global Achievements", value="global",
+                                 default=(self.scope == "global")),
+        ]
 
     def refresh_items(self):
-        if self.filter == "done":
-            self.items = [(a, v) for a, v in self.all_items if a in self.unlocked]
-        elif self.filter == "todo":
-            self.items = [(a, v) for a, v in self.all_items if a not in self.unlocked]
+        if self.scope == "global":
+            counts, _total = db.achievement_counts()
+            self.items = sorted(self.all_items,
+                                key=lambda kv: (-counts.get(kv[0], 0), kv[1][0]))
         else:
             self.items = self.all_items
+        if self.filter == "done":
+            self.items = [(a, v) for a, v in self.items if a in self.unlocked]
+        elif self.filter == "todo":
+            self.items = [(a, v) for a, v in self.items if a not in self.unlocked]
         self.pages = max(1, (len(self.items) + self.PER_PAGE - 1) // self.PER_PAGE)
 
     def make_embed(self) -> discord.Embed:
         chunk = self.items[self.page * self.PER_PAGE:(self.page + 1) * self.PER_PAGE]
-        filt = {"all": "", "done": " - completed", "todo": " - incomplete"}[self.filter]
-        lines = [f"{'✅' if aid in self.unlocked else '🔒'} **{name}** - {desc}"
-                 for aid, (name, desc) in chunk]
-        embed = discord.Embed(
-            title=f"🏆 Achievements ({len(self.unlocked)}/{len(self.all_items)}){filt}",
-            description="\n".join(lines) if lines else "Nothing here!",
-            color=0xFFD700)
+        if self.scope == "global":
+            counts, total = db.achievement_counts()
+            lines = []
+            for aid, (name, desc) in chunk:
+                n = counts.get(aid, 0)
+                pct = (100.0 * n / total) if total else 0.0
+                mark = "✅" if aid in self.unlocked else "🔒"
+                lines.append(f"{mark} **{name}** - {desc} {pct:.1f}%")
+            embed = discord.Embed(
+                title=f"🌍 Global Achievements ({len(self.unlocked)}/{len(self.all_items)})",
+                description="\n".join(lines) if lines else "Nothing here!",
+                color=0xFFD700)
+        else:
+            filt = {"all": "", "done": " - completed", "todo": " - incomplete"}[self.filter]
+            lines = [f"{'✅' if aid in self.unlocked else '🔒'} **{name}** - {desc}"
+                     for aid, (name, desc) in chunk]
+            embed = discord.Embed(
+                title=f"🏆 Achievements ({len(self.unlocked)}/{len(self.all_items)}){filt}",
+                description="\n".join(lines) if lines else "Nothing here!",
+                color=0xFFD700)
         embed.set_footer(text=f"Page {self.page + 1}/{self.pages}")
         return embed
 
@@ -2518,11 +2670,11 @@ class AchievementsView(discord.ui.View):
         self.page = (self.page + delta) % self.pages
         await interaction.response.edit_message(embed=self.make_embed(), view=self)
 
-    @discord.ui.button(label="", emoji="◀", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="", emoji="◀", style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._turn(interaction, -1)
 
-    @discord.ui.button(label="", emoji="▶", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="", emoji="▶", style=discord.ButtonStyle.secondary, row=2)
     async def forward(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._turn(interaction, 1)
 
@@ -2626,9 +2778,20 @@ class OresView(discord.ui.View):
 
 
 @bot.tree.command(name="ores", description="Browse every ore, tier by tier.")
-async def ores(interaction: discord.Interaction):
-    view = OresView(SUID(interaction))
-    await interaction.response.send_message(embed=view.make_embed(), view=view)
+@app_commands.describe(user="Optional: show another player's public checkmarks")
+async def ores(interaction: discord.Interaction, user: discord.User | None = None):
+    target = user or interaction.user
+    tid = SUID(interaction, target.id)
+    t = db.get_user(tid)
+    public = bool(t.get("ores_public", 0))
+    if target.id != interaction.user.id and not public:
+        await interaction.response.send_message(
+            f"🔒 **{(await display_name(interaction, tid))}'s** ore collection is private.",
+            ephemeral=True)
+        return
+    view = OresView(tid)
+    await interaction.response.send_message(embed=view.make_embed(), view=view,
+                                            ephemeral=not public)
 
 
 _name_cache: dict[int, str] = {}
@@ -2666,14 +2829,35 @@ async def leaderboard(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed, view=view)
 
 
+class LeaderboardBoardSelect(discord.ui.Select):
+    def __init__(self, current: str):
+        super().__init__(placeholder="Choose leaderboard…", options=[
+            discord.SelectOption(label="Money", value="money", emoji="💰",
+                                 default=(current == "money")),
+            discord.SelectOption(label="Spins", value="spins", emoji="🎰",
+                                 default=(current == "spins")),
+        ])
+
+    async def callback(self, interaction: discord.Interaction):
+        view: LeaderboardView = self.view
+        if interaction.user.id != view.owner_id:
+            await interaction.response.send_message("Run `/leaderboard` yourself to browse!",
+                                                    ephemeral=True)
+            return
+        view.page = 0 if self.values[0] == "money" else 1
+        view.sync_board()
+        await interaction.response.edit_message(embed=await view.make_embed(interaction), view=view)
+
+
 class LeaderboardView(discord.ui.View):
-    """Page 1: richest. Page 2: most spins."""
+    """Page 0: richest. Page 1: most spins. Switched via dropdown."""
 
     def __init__(self, owner_id: int, guild: str):
         super().__init__(timeout=300)
         self.owner_id = owner_id
         self.guild = guild
         self.page = 0
+        self.add_item(LeaderboardBoardSelect("money"))
 
     async def make_embed(self, interaction: discord.Interaction) -> discord.Embed:
         import asyncio as _aio
@@ -2721,21 +2905,13 @@ class LeaderboardView(discord.ui.View):
         embed.set_footer(text=f"Page {self.page + 1}/2")
         return embed
 
-    async def _turn(self, interaction: discord.Interaction, delta: int):
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("Run `/leaderboard` yourself to browse!",
-                                                    ephemeral=True)
-            return
-        self.page = (self.page + delta) % 2
-        await interaction.response.edit_message(embed=await self.make_embed(interaction), view=self)
-
-    @discord.ui.button(emoji="◀", style=discord.ButtonStyle.secondary, row=1)
-    async def prev(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._turn(interaction, -1)
-
-    @discord.ui.button(emoji="▶", style=discord.ButtonStyle.secondary, row=1)
-    async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._turn(interaction, 1)
+    def sync_board(self):
+        self.children[0].options = [
+            discord.SelectOption(label="Money", value="money", emoji="💰",
+                                 default=(self.page == 0)),
+            discord.SelectOption(label="Spins", value="spins", emoji="🎰",
+                                 default=(self.page == 1)),
+        ]
 
 
 @bot.tree.command(name="help", description="Show every command.")
@@ -2896,6 +3072,7 @@ SETTING_DEFS = [
     ("bank", "bank_public", "🏦 Bank"),
     ("balance", "balance_public", "💵 Balance"),
     ("mail", "mail_public", "📬 Mail"),
+    ("ores", "ores_public", "⛏️ Ores"),
 ]
 
 
@@ -3023,7 +3200,7 @@ def _bump_obtained(uid: str, u: dict, rarity: str, quality: str):
     ups = {}
     if rarity == "Mythical":
         ups["dih_pulls"] = u.get("dih_pulls", 0) + 1
-    if quality == "Perfect":
+    if quality == "Perfect Condition":
         ups["perfect_pulls"] = u.get("perfect_pulls", 0) + 1
     if ups:
         db.update_user(uid, **ups)
@@ -3212,6 +3389,9 @@ class TradeMainView(discord.ui.View):
         db.delete_trade(t["id"])
         # obtain achievements (incl. Jackpot) per recipient + collector rechecks
         newly_a, newly_b = [], []
+        for _uid in (a, b):
+            _u = db.get_user(_uid)
+            db.update_user(_uid, trade_count=_u.get("trade_count", 0) + 1)
         if ib is not None:
             newly_a = check_achievements(a, db.get_user(a), ib["rarity"], ib["quality"])
             sync_collectors(a)
@@ -3604,6 +3784,7 @@ class ScopeGiftModal(discord.ui.Modal, title="Gift - how many?"):
                 return
             limit = max(0, limit)
         moved = 0
+        moved_dih, moved_perfect = 0, 0
         desc_parts = []
         from_vault = (self.source == "vault")
         for t in targets:
@@ -3626,6 +3807,10 @@ class ScopeGiftModal(discord.ui.Modal, title="Gift - how many?"):
                                                origin=origin)
                 db.add_many_items(r, [(t["rarity"], t["quality"], t["ore"])] * got, origin=origin)
                 moved += got
+                if t["rarity"] == "Mythical":
+                    moved_dih += got
+                if t["quality"] == "Perfect Condition":
+                    moved_perfect += got
                 remaining -= got
                 if remaining <= 0:
                     break
@@ -3635,10 +3820,25 @@ class ScopeGiftModal(discord.ui.Modal, title="Gift - how many?"):
         giver_name = await display_name(interaction, g)
         what = ", ".join(desc_parts[:3]) + ("…" if len(desc_parts) > 3 else "")
         db.add_mail(r, f"🎁 **{giver_name}** gifted you **{moved}x** {what}!")
+        if moved > 0:
+            _gu = db.get_user(g)
+            db.update_user(g, gift_ore_count=_gu.get("gift_ore_count", 0) + 1)
+            _giver_newly = check_achievements(g, db.get_user(g), "", "")
+        else:
+            _giver_newly = []
         sync_collectors(g)  # giver may have broken a set
         # recipient obtain checks per distinct gifted pair (Jackpot needs the combo)
         gifted_pairs = sorted({(t["rarity"], t["quality"]) for t in targets})
         newly2 = []
+        if moved > 0:
+            _ru = db.get_user(r)
+            _bumps = {}
+            if moved_dih:
+                _bumps["dih_pulls"] = _ru.get("dih_pulls", 0) + moved_dih
+            if moved_perfect:
+                _bumps["perfect_pulls"] = _ru.get("perfect_pulls", 0) + moved_perfect
+            if _bumps:
+                db.update_user(r, **_bumps)
         if moved > 0:
             first2 = True
             for rr, qq in gifted_pairs:
@@ -3647,6 +3847,9 @@ class ScopeGiftModal(discord.ui.Modal, title="Gift - how many?"):
         recip_name = await self._recipient_name(interaction, r)
         result_msg = await interaction.followup.send(
             f"🎁 Gifted **{moved}x** {what} to **{recip_name}**!", ephemeral=True)
+        if _giver_newly:
+            await achievement_reply(interaction, interaction.user.mention, _giver_newly,
+                                    ref_message=result_msg)
         if newly2:
             # achievements go to the recipient's mail, not a reply
             names = []
@@ -3740,7 +3943,10 @@ class GiftMoneyView(discord.ui.View):
             db.update_user(g, bank_balance=u.get("bank_balance", 0) - self.amount)
         ru = db.get_user(r)
         db.update_user(r, balance=ru["balance"] + self.amount)
+        _mu = db.get_user(g)
+        db.update_user(g, gift_money_count=_mu.get("gift_money_count", 0) + 1)
         newly = check_achievements(r, db.get_user(r), "", "")
+        check_achievements(g, db.get_user(g), "", "")
         giver_name = await display_name(interaction, g)
         db.add_mail(r, f"🎁 **{giver_name}** gifted you **${self.amount:,}**!")
         if newly:

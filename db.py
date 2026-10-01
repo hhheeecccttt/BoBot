@@ -35,17 +35,22 @@ _USERS_DDL = """CREATE TABLE users (
     elite_pulls INTEGER NOT NULL DEFAULT 0,
     dih_pulls INTEGER NOT NULL DEFAULT 0,
     perfect_pulls INTEGER NOT NULL DEFAULT 0,
-    buy_count INTEGER NOT NULL DEFAULT 0,
-    sell_count INTEGER NOT NULL DEFAULT 0,
+            buy_count INTEGER NOT NULL DEFAULT 0,
+            sell_count INTEGER NOT NULL DEFAULT 0,
+            trade_count INTEGER NOT NULL DEFAULT 0,
+            gift_ore_count INTEGER NOT NULL DEFAULT 0,
+            gift_money_count INTEGER NOT NULL DEFAULT 0,
+            market_put_count INTEGER NOT NULL DEFAULT 0,
     inv_public INTEGER NOT NULL DEFAULT 0,
     ach_public INTEGER NOT NULL DEFAULT 0,
     stats_public INTEGER NOT NULL DEFAULT 0,
     bank_public INTEGER NOT NULL DEFAULT 0,
     vault_public INTEGER NOT NULL DEFAULT 0,
     market_public INTEGER NOT NULL DEFAULT 0,
-    mail_public INTEGER NOT NULL DEFAULT 0,
-    balance_public INTEGER NOT NULL DEFAULT 0,
-    timezone TEXT NOT NULL DEFAULT 'UTC',
+            mail_public INTEGER NOT NULL DEFAULT 0,
+            balance_public INTEGER NOT NULL DEFAULT 0,
+            ores_public INTEGER NOT NULL DEFAULT 0,
+            timezone TEXT NOT NULL DEFAULT 'UTC',
     bank_balance INTEGER NOT NULL DEFAULT 0,
     rarest_spin TEXT NOT NULL DEFAULT '',
     rarest_buy TEXT NOT NULL DEFAULT '',
@@ -81,6 +86,7 @@ _MARKET_DDL = """CREATE TABLE market (
     quality TEXT NOT NULL,
     ore TEXT NOT NULL,
     price INTEGER NOT NULL,
+    origin TEXT NOT NULL DEFAULT 'spin',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );"""
 _ACH_DDL = """CREATE TABLE achievements (
@@ -165,6 +171,10 @@ def init_db():
             ("users", "perfect_pulls", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "buy_count", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "sell_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "trade_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "gift_ore_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "gift_money_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "market_put_count", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "inv_public", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "ach_public", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "stats_public", "INTEGER NOT NULL DEFAULT 0"),
@@ -173,6 +183,7 @@ def init_db():
             ("users", "market_public", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "mail_public", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "balance_public", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "ores_public", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "timezone", "TEXT NOT NULL DEFAULT 'UTC'"),
             ("users", "bank_balance", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "rarest_spin", "TEXT NOT NULL DEFAULT ''"),
@@ -180,6 +191,7 @@ def init_db():
             ("inventory", "origin", "TEXT NOT NULL DEFAULT 'spin'"),
             ("inventory", "origin_detail", "TEXT NOT NULL DEFAULT ''"),
             ("vault", "origin_detail", "TEXT NOT NULL DEFAULT ''"),
+            ("market", "origin", "TEXT NOT NULL DEFAULT 'spin'"),
         ):
             try:
                 conn.execute(f"ALTER TABLE {_table} ADD COLUMN {_col} {_ddl}")
@@ -208,6 +220,26 @@ def init_db():
         try:
             for _t in ("inventory", "vault", "market"):
                 conn.execute(f"UPDATE {_t} SET rarity='Elite' WHERE ore='Garnet' AND rarity='Mid'")
+        except Exception:
+            pass
+        # Quality rework: Chipped/Scratched/Perfect -> new 7-quality scale (idempotent)
+        try:
+            for _t in ("inventory", "vault", "market"):
+                conn.execute(f"UPDATE {_t} SET quality='Mildly Chipped' WHERE quality='Chipped'")
+                conn.execute(f"UPDATE {_t} SET quality='Mildly Scratched' WHERE quality='Scratched'")
+                conn.execute(f"UPDATE {_t} SET quality='Perfect Condition' WHERE quality='Perfect'")
+            conn.execute("UPDATE users SET rarest_spin=REPLACE(rarest_spin,'|Chipped|','|Mildly Chipped|') "
+                         "WHERE rarest_spin LIKE '%|Chipped|%'")
+            conn.execute("UPDATE users SET rarest_spin=REPLACE(rarest_spin,'|Scratched|','|Mildly Scratched|') "
+                         "WHERE rarest_spin LIKE '%|Scratched|%'")
+            conn.execute("UPDATE users SET rarest_spin=REPLACE(rarest_spin,'|Perfect|','|Perfect Condition|') "
+                         "WHERE rarest_spin LIKE '%|Perfect|%'")
+            conn.execute("UPDATE users SET rarest_buy=REPLACE(rarest_buy,'|Chipped|','|Mildly Chipped|') "
+                         "WHERE rarest_buy LIKE '%|Chipped|%'")
+            conn.execute("UPDATE users SET rarest_buy=REPLACE(rarest_buy,'|Scratched|','|Mildly Scratched|') "
+                         "WHERE rarest_buy LIKE '%|Scratched|%'")
+            conn.execute("UPDATE users SET rarest_buy=REPLACE(rarest_buy,'|Perfect|','|Perfect Condition|') "
+                         "WHERE rarest_buy LIKE '%|Perfect|%'")
         except Exception:
             pass
         conn.commit()
@@ -469,6 +501,14 @@ def revoke_achievement(user_id: str, ach_id: str) -> bool:
         return cur.rowcount > 0
 
 
+def achievement_counts() -> tuple[dict, int]:
+    """Global rarity stats: ({ach_id: owner_count}, total_users)."""
+    with _lock, get_conn() as conn:
+        rows = conn.execute("SELECT ach_id, COUNT(DISTINCT user_id) c FROM achievements GROUP BY ach_id").fetchall()
+        total = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
+        return ({r["ach_id"]: r["c"] for r in rows}, total)
+
+
 def latest_rarest(user_id: str, market_bought: bool) -> dict | None:
     """Latest item of the rarest tier the user holds.
     market_bought=True -> only origin='market'; False -> everything else."""
@@ -533,24 +573,37 @@ def inventory_value(user_id: str, ore: str | None = None, quality: str | None = 
 def market_list_many(guild_id: str, seller_id: str, stacks: list[dict],
                      price: int, amount: int) -> int:
     """List up to `amount` ores across the given grouped stacks. Batched.
-    Returns how many listings were actually created."""
+    Origins preserved per unit. Returns how many listings were actually created."""
     made = 0
-    took: list[tuple[str, str, str]] = []
     remaining = max(0, amount)
+    take: list[tuple[str, str, str, str]] = []  # (rarity, quality, ore, origin)
     for t in stacks:
         if remaining <= 0:
             break
         want = min(t["count"], remaining)
-        got = remove_many_items(seller_id, t["rarity"], t["quality"], t["ore"], want)
-        took += [(t["rarity"], t["quality"], t["ore"])] * got
-        made += got
-        remaining -= got
-    if took:
+        # split the take across origins so origin survives
+        with _lock, get_conn() as conn:
+            grown = conn.execute(
+                """SELECT origin, COUNT(*) as count FROM inventory
+                   WHERE user_id=? AND rarity=? AND quality=? AND ore=?
+                   GROUP BY origin""",
+                (seller_id, t["rarity"], t["quality"], t["ore"]),
+            ).fetchall()
+        for grow in grown:
+            if remaining <= 0:
+                break
+            k = min(grow["count"], remaining)
+            got = remove_many_items(seller_id, t["rarity"], t["quality"], t["ore"], k,
+                                    origin=grow["origin"])
+            take += [(t["rarity"], t["quality"], t["ore"], grow["origin"])] * got
+            made += got
+            remaining -= got
+    if take:
         with _lock, get_conn() as conn:
             conn.executemany(
-                "INSERT INTO market (guild_id, seller_id, rarity, quality, ore, price) "
-                "VALUES (?,?,?,?,?,?)",
-                [(guild_id, seller_id, r, q, o, price) for r, q, o in took],
+                "INSERT INTO market (guild_id, seller_id, rarity, quality, ore, price, origin) "
+                "VALUES (?,?,?,?,?,?,?)",
+                [(guild_id, seller_id, r, q, o, price, org) for r, q, o, org in take],
             )
             conn.commit()
     return made
@@ -559,13 +612,13 @@ def market_list_many(guild_id: str, seller_id: str, stacks: list[dict],
 def market_list(guild_id: str, seller_id: str, rarity: str, quality: str, ore: str,
                 price: int) -> int | None:
     """Removes one item from seller inventory and creates a listing. Returns listing id or None."""
-    item_id = remove_one_item(seller_id, rarity, quality, ore)
-    if item_id is None:
+    item = take_one_item(seller_id, rarity, quality, ore)
+    if item is None:
         return None
     with _lock, get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO market (guild_id, seller_id, rarity, quality, ore, price) VALUES (?,?,?,?,?,?)",
-            (guild_id, seller_id, rarity, quality, ore, price),
+            "INSERT INTO market (guild_id, seller_id, rarity, quality, ore, price, origin) VALUES (?,?,?,?,?,?,?)",
+            (guild_id, seller_id, rarity, quality, ore, price, item.get("origin", "spin")),
         )
         conn.commit()
         return cur.lastrowid
