@@ -892,6 +892,8 @@ class InvBrowser(discord.ui.View):
         self.trade_side = trade_side
         self.guild = guild
         self.gift_from = gift_from
+        self.page = 0
+        self._pages = 1
         self._rebuild()
 
     def _t(self) -> str:
@@ -967,7 +969,12 @@ class InvBrowser(discord.ui.View):
             self.ore, self.selected = None, None
             stacks = []
             ores = self.overviews(grouped)
+        pages = max(1, (len(ores) + 24) // 25)
+        self.page = self.page % pages
+        page_ores = ores[self.page * 25:(self.page + 1) * 25]
         n, v = self.totals(grouped)
+        self._page_ores = page_ores
+        self._pages = pages
         icon = {"inv": "🎒", "vault": "🗝️", "gift": "🎁", "trade": "🔄", "list": "📦"}.get(
             self.source, "🎒")
         what = {"inv": "Inventory", "vault": "Vault",
@@ -984,14 +991,14 @@ class InvBrowser(discord.ui.View):
             desc = "\n".join(lines) or "Empty!"
         else:
             title = f"{icon} {self.target_name}'s {what} ({n} ores) (${v:,})"
-            desc = "\n".join(f"**{o['ore']}** x{o['count']}" for o in ores[:25]) or "Empty!"
+            desc = "\n".join(f"**{o['ore']}** x{o['count']}" for o in page_ores) or "Empty!"
         if self.quality:
             title += f" - {self.quality} only"
         if self.tier:
             title += f" - {config.tier_name(self.tier)}"
-        if len(ores) > 25 and not self.ore:
-            desc += f"\n-# Showing 25 of {len(ores)} ores."
-        self._rebuild(ores, stacks)
+        if pages > 1 and not self.ore:
+            title += f" (page {self.page + 1}/{pages})"
+        self._rebuild(page_ores, stacks)
         return discord.Embed(title=title, description=desc,
                              color=0x00BCD4 if self.source == "inv" else 0x795548)
 
@@ -1005,7 +1012,7 @@ class InvBrowser(discord.ui.View):
         self.add_item(BrowserTierSelect(self.tier))
         self.add_item(BrowserOreSelect(ores, self.ore))
         self.add_item(BrowserQualitySelect(self.quality))
-        # inspect button on every UI; grayed unless tier+ore+quality all picked
+        # inspect button on every UI, never grayed
         if self.ore and stacks:
             if self.selected is None:
                 self.selected = (stacks[0]["rarity"], stacks[0]["quality"], stacks[0]["ore"])
@@ -1016,9 +1023,7 @@ class InvBrowser(discord.ui.View):
             all_stacks.sort(key=lambda r: (config.tier_index(r["rarity"]),
                                            list(config.QUALITIES.keys()).index(r["quality"])))
             inspect_stacks = all_stacks or None
-        full = bool(self.tier and self.ore and self.quality)
         if inspect_stacks:
-            # inspect is always clickable everywhere
             self.add_item(self._inspect_btn(inspect_stacks, disabled=False))
         mine = self.viewer_id == self.target_id
         full = bool(self.tier and self.ore and self.quality)
@@ -1034,6 +1039,29 @@ class InvBrowser(discord.ui.View):
                 self.add_item(self._trade_select_btn())
             elif self.source == "list" and full:
                 self.add_item(self._list_this_btn())
+        # page turns on every UI
+        if getattr(self, "_pages", 1) > 1 and not self.ore:
+            self.add_item(self._prev_btn())
+            self.add_item(self._next_btn())
+
+    def _page_btn(self, delta: int, emoji: str):
+        view = self
+
+        async def cb(interaction: discord.Interaction):
+            if interaction.user.id != view.viewer_id:
+                await interaction.response.send_message("That's not yours!", ephemeral=True)
+                return
+            view.page = (view.page + delta) % max(1, getattr(view, "_pages", 1))
+            await interaction.response.edit_message(embed=view.render(), view=view)
+        btn = discord.ui.Button(emoji=emoji, style=discord.ButtonStyle.secondary)
+        btn.callback = cb
+        return btn
+
+    def _prev_btn(self):
+        return self._page_btn(-1, "◀")
+
+    def _next_btn(self):
+        return self._page_btn(1, "▶")
 
     def _inspect_btn(self, stacks: list[dict], disabled: bool = False):
         view = self
@@ -1042,8 +1070,9 @@ class InvBrowser(discord.ui.View):
             if interaction.user.id != view.viewer_id:
                 await interaction.response.send_message("That's not yours!", ephemeral=True)
                 return
-            if len(stacks) == 1:
+            if len(stacks) == 1 and view.source != "list":
                 # single stack: show it directly, no picker needed
+                # (list mode, market view and spin always show the picker)
                 s = stacks[0]
                 scoped = f"{view.guild}:{view.target_id}"
                 if view.source == "vault" or not view._data_inv():
@@ -1484,6 +1513,25 @@ class BankTransferModal(discord.ui.Modal, title="Bank transfer"):
 
 
 
+@bot.tree.command(name="bank", description="See banks (yours, or a public one).")
+@app_commands.describe(user="Optional: view another player's public bank")
+async def bank(interaction: discord.Interaction, user: discord.User | None = None):
+    target = user or interaction.user
+    tid = SUID(interaction, target.id)
+    t = db.get_user(tid)
+    public = bool(t.get("bank_public", 0))
+    if target.id != interaction.user.id and not public:
+        await interaction.response.send_message(
+            f"🔒 **{(await display_name(interaction, tid))}'s** bank is private.", ephemeral=True)
+        return
+    t = db.get_user(tid)
+    name = await display_name(interaction, tid)
+    embed = discord.Embed(title=f"🏦 {name}'s Bank", color=0x3F51B5)
+    embed.add_field(name="💰 Stored", value=f"**${t.get('bank_balance', 0):,}**")
+    view = BankView(interaction.user.id, target.id)
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=not public)
+
+
 class BankView(discord.ui.View):
     def __init__(self, viewer_id: int, target_id: int):
         super().__init__(timeout=180)
@@ -1491,6 +1539,7 @@ class BankView(discord.ui.View):
         self.target_id = target_id
         if viewer_id != target_id:
             self.withdraw.disabled = True
+            self.deposit.disabled = True
 
     @discord.ui.button(label="Withdraw", style=discord.ButtonStyle.green, emoji="💵")
     async def withdraw(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1969,7 +2018,9 @@ class BuyAmountModal(discord.ui.Modal, title="Buy - how many?"):
             per_seller[l["seller_id"]][1] += l["price"]
         for l in rows:
             if l.get("origin") == "market" and l["price"] > config.quicksell_value(l["rarity"]):
-                db.grant_achievement(l["seller_id"], "scalper")
+                if db.grant_achievement(l["seller_id"], "scalper"):
+                    db.add_mail(l["seller_id"],
+                                f"🏆 **{config.ACHIEVEMENTS['scalper'][0]}** - {config.ACHIEVEMENTS['scalper'][1]}")
         buyer_name = await display_name(interaction, buyer)
         for sid, (cnt, sub) in per_seller.items():
             db.add_mail(sid, f"💰 **{buyer_name}** bought **{cnt}x {self.ore} ({self.quality})** "
@@ -2122,7 +2173,9 @@ class MarketInspectPopup(discord.ui.View):
         if listing["rarity"] == "Mythical":
             db.grant_achievement(listing["seller_id"], "supplier")
         if listing.get("origin") == "market" and listing["price"] > config.quicksell_value(listing["rarity"]):
-            db.grant_achievement(listing["seller_id"], "scalper")
+            if db.grant_achievement(listing["seller_id"], "scalper"):
+                db.add_mail(listing["seller_id"],
+                            f"🏆 **{config.ACHIEVEMENTS['scalper'][0]}** - {config.ACHIEVEMENTS['scalper'][1]}")
         check_achievements(listing["seller_id"], db.get_user(listing["seller_id"]), "", "")
         buyer_name = await display_name(interaction, buyer)
         db.add_mail(listing["seller_id"],
