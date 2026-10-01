@@ -49,16 +49,16 @@ _USERS_DDL = """CREATE TABLE users (
             gift_ore_count INTEGER NOT NULL DEFAULT 0,
             gift_money_count INTEGER NOT NULL DEFAULT 0,
             market_put_count INTEGER NOT NULL DEFAULT 0,
-    inv_public INTEGER NOT NULL DEFAULT 0,
-    ach_public INTEGER NOT NULL DEFAULT 0,
-    stats_public INTEGER NOT NULL DEFAULT 0,
-    bank_public INTEGER NOT NULL DEFAULT 0,
-    vault_public INTEGER NOT NULL DEFAULT 0,
-    market_public INTEGER NOT NULL DEFAULT 0,
-            mail_public INTEGER NOT NULL DEFAULT 0,
-            balance_public INTEGER NOT NULL DEFAULT 0,
-            ores_public INTEGER NOT NULL DEFAULT 0,
-            networth_public INTEGER NOT NULL DEFAULT 0,
+    inv_public INTEGER NOT NULL DEFAULT 1,
+    ach_public INTEGER NOT NULL DEFAULT 1,
+    stats_public INTEGER NOT NULL DEFAULT 1,
+    bank_public INTEGER NOT NULL DEFAULT 1,
+    vault_public INTEGER NOT NULL DEFAULT 1,
+    market_public INTEGER NOT NULL DEFAULT 1,
+            mail_public INTEGER NOT NULL DEFAULT 1,
+            balance_public INTEGER NOT NULL DEFAULT 1,
+            ores_public INTEGER NOT NULL DEFAULT 1,
+            networth_public INTEGER NOT NULL DEFAULT 1,
             timezone TEXT NOT NULL DEFAULT 'UTC',
     bank_balance INTEGER NOT NULL DEFAULT 0,
     rarest_spin TEXT NOT NULL DEFAULT '',
@@ -187,16 +187,16 @@ def init_db():
             ("users", "gift_ore_count", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "gift_money_count", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "market_put_count", "INTEGER NOT NULL DEFAULT 0"),
-            ("users", "inv_public", "INTEGER NOT NULL DEFAULT 0"),
-            ("users", "ach_public", "INTEGER NOT NULL DEFAULT 0"),
-            ("users", "stats_public", "INTEGER NOT NULL DEFAULT 0"),
-            ("users", "bank_public", "INTEGER NOT NULL DEFAULT 0"),
-            ("users", "vault_public", "INTEGER NOT NULL DEFAULT 0"),
-            ("users", "market_public", "INTEGER NOT NULL DEFAULT 0"),
-            ("users", "mail_public", "INTEGER NOT NULL DEFAULT 0"),
-            ("users", "balance_public", "INTEGER NOT NULL DEFAULT 0"),
-            ("users", "ores_public", "INTEGER NOT NULL DEFAULT 0"),
-            ("users", "networth_public", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "inv_public", "INTEGER NOT NULL DEFAULT 1"),
+            ("users", "ach_public", "INTEGER NOT NULL DEFAULT 1"),
+            ("users", "stats_public", "INTEGER NOT NULL DEFAULT 1"),
+            ("users", "bank_public", "INTEGER NOT NULL DEFAULT 1"),
+            ("users", "vault_public", "INTEGER NOT NULL DEFAULT 1"),
+            ("users", "market_public", "INTEGER NOT NULL DEFAULT 1"),
+            ("users", "mail_public", "INTEGER NOT NULL DEFAULT 1"),
+            ("users", "balance_public", "INTEGER NOT NULL DEFAULT 1"),
+            ("users", "ores_public", "INTEGER NOT NULL DEFAULT 1"),
+            ("users", "networth_public", "INTEGER NOT NULL DEFAULT 1"),
             ("users", "timezone", "TEXT NOT NULL DEFAULT 'UTC'"),
             ("users", "bank_balance", "INTEGER NOT NULL DEFAULT 0"),
             ("users", "rarest_spin", "TEXT NOT NULL DEFAULT ''"),
@@ -253,6 +253,21 @@ def init_db():
                          "WHERE rarest_buy LIKE '%|Scratched|%'")
             conn.execute("UPDATE users SET rarest_buy=REPLACE(rarest_buy,'|Perfect|','|Perfect Condition|') "
                          "WHERE rarest_buy LIKE '%|Perfect|%'")
+        except Exception:
+            pass
+        # everything public by default (one-time backfill for existing users)
+        try:
+            _pub = conn.execute("SELECT value FROM kv WHERE key='public_default_v1'").fetchone()
+            if _pub is None:
+                for _c in ("inv_public", "ach_public", "stats_public", "bank_public",
+                           "vault_public", "market_public", "mail_public", "balance_public",
+                           "ores_public", "networth_public"):
+                    try:
+                        conn.execute(f"UPDATE users SET {_c}=1 WHERE {_c}=0")
+                    except Exception:
+                        pass
+                conn.execute("INSERT INTO kv (key, value) VALUES ('public_default_v1','1') "
+                             "ON CONFLICT(key) DO UPDATE SET value='1'")
         except Exception:
             pass
         conn.commit()
@@ -799,6 +814,33 @@ def market_cancel_all(seller_id: str) -> int:
         return len(rows)
 
 
+def market_cancel_many(seller_id: str, ore: str | None = None, quality: str | None = None,
+                       tier: str | None = None, n: int = 1) -> int:
+    """Cancel up to n of this seller's listings in scope (latest first). Returns count."""
+    if n <= 0:
+        return 0
+    with _lock, get_conn() as conn:
+        clauses, params = ["seller_id = ?"], [seller_id]
+        if ore:
+            clauses.append("ore = ?")
+            params.append(ore)
+        if quality:
+            clauses.append("quality = ?")
+            params.append(quality)
+        if tier:
+            clauses.append("rarity = ?")
+            params.append(tier)
+        rows = conn.execute(
+            f"SELECT * FROM market WHERE {' AND '.join(clauses)} ORDER BY id DESC LIMIT ?",
+            (*params, n)).fetchall()
+        for l in rows:
+            conn.execute("INSERT INTO inventory (user_id, rarity, quality, ore) VALUES (?,?,?,?)",
+                         (seller_id, l["rarity"], l["quality"], l["ore"]))
+            conn.execute("DELETE FROM market WHERE id=?", (l["id"],))
+        conn.commit()
+        return len(rows)
+
+
 def market_seller_ores(seller_id: str) -> list[dict]:
     """Distinct ores this seller has listed: [{ore, rarities}, ...]"""
     with _lock, get_conn() as conn:
@@ -886,8 +928,8 @@ def max_trade_id() -> int:
 
 KV_DEFAULTS = {
     "commands_enabled": "1",
-    "spins_per_day": "3",
-    "max_spin": "100000",
+    "spins_per_day": "10",
+    "max_spin": "1",
 }
 
 

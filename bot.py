@@ -346,9 +346,9 @@ class SpinView(discord.ui.View):
         u = db.reset_spins_if_new_day(uid, user_today(uid))
         if not UNLIMITED_SPINS:
             try:
-                spd = max(1, int(db.get_setting("spins_per_day", guild_scope(interaction)) or 3))
+                spd = max(1, int(db.get_setting("spins_per_day", guild_scope(interaction)) or 10))
             except ValueError:
-                spd = 3
+                spd = 10
             if u["spins_used_today"] >= spd:
                 await interaction.followup.send(
                     f"❌ Out of spins! Resets in **{user_time_until_reset(uid)}**.")
@@ -1328,23 +1328,23 @@ def _run_spin_batch(uid: str, n: int):
     return pulls, u, item_id
 
 
-@bot.tree.command(name="spin", description=f"Spin! Optional amount (up to 100000).")
+@bot.tree.command(name="spin", description=f"Spin! Optional amount (server limit applies).")
 @app_commands.describe(amount="How many spins (default 1)")
 async def spin(interaction: discord.Interaction, amount: app_commands.Range[int, 1, 100000] = 1):
     await interaction.response.defer()
     uid = SUID(interaction)
     db.init_db()
     u = db.reset_spins_if_new_day(uid, user_today(uid))
-    raw_spd = (db.get_setting("spins_per_day", guild_scope(interaction)) or "3").strip().lower()
+    raw_spd = (db.get_setting("spins_per_day", guild_scope(interaction)) or "10").strip().lower()
     unlimited_day = raw_spd in ("inf", "infinite", "unlimited")
     try:
         spins_per_day = 10 ** 12 if unlimited_day else max(1, int(raw_spd))
     except ValueError:
-        spins_per_day = 3
+        spins_per_day = 10
     try:
-        max_spin = max(1, min(100000, int(db.get_setting("max_spin", guild_scope(interaction)) or 100000)))
+        max_spin = max(1, min(100000, int(db.get_setting("max_spin", guild_scope(interaction)) or 1)))
     except ValueError:
-        max_spin = 100000
+        max_spin = 1
     amount = min(amount, max_spin)
 
     if UNLIMITED_SPINS:
@@ -2248,21 +2248,12 @@ def cancel_format(listings: list[dict]) -> list[str]:
 
 
 async def render_cancel_browser(owner_id: int, interaction: discord.Interaction,
-                                ore: str | None = None, quality: str | None = None,
-                                sort: str | None = None, page: int = 0,
-                                tier: str | None = None):
-    """Cancel browser mirroring market_view: filters + sort + inspect + pages."""
+                                 ore: str | None = None, quality: str | None = None,
+                                 page: int = 0, tier: str | None = None):
+    """Cancel browser mirroring market_list: tier/ore/quality filters + inspect + pages."""
     scope = SUID(interaction, owner_id)
-    all_listings = db.market_by_seller(scope, ore, quality, limit=50, tier=tier)
-    if sort == "cheapest":
-        all_listings.sort(key=lambda l: (l["price"], -l["id"]))
-    elif sort == "expensive":
-        all_listings.sort(key=lambda l: (-l["price"], -l["id"]))
-    elif sort == "average" and all_listings:
-        mean = sum(l["price"] for l in all_listings) / len(all_listings)
-        all_listings.sort(key=lambda l: (abs(l["price"] - mean), -l["id"]))
-    else:
-        all_listings.sort(key=lambda l: -l["id"])
+    all_listings = db.market_by_seller(scope, ore, quality, limit=1000, tier=tier)
+    all_listings.sort(key=lambda l: -l["id"])
     pages = max(1, (len(all_listings) + PAGE_SIZE - 1) // PAGE_SIZE)
     page = page % pages
     chunk = all_listings[page * PAGE_SIZE:page * PAGE_SIZE + PAGE_SIZE]
@@ -2270,19 +2261,16 @@ async def render_cancel_browser(owner_id: int, interaction: discord.Interaction,
         f"{ore}" if ore else None,
         f"({quality})" if quality else None,
         config.tier_name(tier) if tier else None) if x)
-    label = {"cheapest": "cheapest", "average": "closest to average",
-             "expensive": "most expensive"}.get(sort or "new", "latest")
     title = f"🚫 Your listings"
     if scope_txt:
         title += f" - {scope_txt}"
-    title += f" - {label}"
     if pages > 1:
         title += f" (page {page + 1}/{pages})"
     embed = discord.Embed(title=title,
                           description="\n".join(cancel_format(chunk)) if chunk else "Nothing here!",
                           color=0xF44336)
     embed.set_footer(text="Inspect a listing, then hit Cancel")
-    return embed, CancelBrowser(owner_id, scope, ore=ore, quality=quality, sort=sort,
+    return embed, CancelBrowser(owner_id, scope, ore=ore, quality=quality,
                                 page=page, pages=pages, chunk=chunk, tier=tier)
 
 
@@ -2343,8 +2331,8 @@ class CancelOreSelect(discord.ui.Select):
             if match and match["rarities"]:
                 view.tier = sorted(match["rarities"], key=config.tier_index)[0]
         embed, view2 = await render_cancel_browser(view.owner_id, interaction, ore=view.ore,
-                                                   quality=view.quality, sort=view.sort,
-                                                   tier=view.tier)
+                                                    quality=view.quality,
+                                                    tier=view.tier)
         await interaction.response.edit_message(embed=embed, view=view2)
 
 
@@ -2375,34 +2363,8 @@ class CancelQualitySelect(discord.ui.Select):
             return
         view.quality = None if self.values[0] == "all" else self.values[0]
         embed, view2 = await render_cancel_browser(view.owner_id, interaction, ore=view.ore,
-                                                   quality=view.quality, sort=view.sort,
-                                                   tier=view.tier)
-        await interaction.response.edit_message(embed=embed, view=view2)
-
-
-class CancelSortSelect(discord.ui.Select):
-    def __init__(self, owner_id: int, current: str | None):
-        self.owner_id = owner_id
-        super().__init__(placeholder="Sort…", options=[
-            discord.SelectOption(label="Latest", value="new", emoji="🆕",
-                                 default=(current in (None, "new"))),
-            discord.SelectOption(label="Cheapest", value="cheapest", emoji="💲",
-                                 default=(current == "cheapest")),
-            discord.SelectOption(label="Closest to average", value="average", emoji="📊",
-                                 default=(current == "average")),
-            discord.SelectOption(label="Most expensive", value="expensive", emoji="💎",
-                                 default=(current == "expensive")),
-        ])
-
-    async def callback(self, interaction: discord.Interaction):
-        view: CancelBrowser = self.view
-        if interaction.user.id != view.owner_id:
-            await interaction.response.send_message("That's not yours!", ephemeral=True)
-            return
-        view.sort = self.values[0]
-        embed, view2 = await render_cancel_browser(view.owner_id, interaction, ore=view.ore,
-                                                   quality=view.quality, sort=view.sort, page=0,
-                                                   tier=view.tier)
+                                                    quality=view.quality,
+                                                    tier=view.tier)
         await interaction.response.edit_message(embed=embed, view=view2)
 
 
@@ -2459,17 +2421,66 @@ class CancelListingView(discord.ui.View):
         await interaction.followup.send(("✅ " if ok else "❌ ") + msg, ephemeral=True)
 
 
+class CancelAmountModal(discord.ui.Modal, title="Cancel listings"):
+    amount = discord.ui.TextInput(label="How many? (number or ALL)", placeholder="e.g. 3 or ALL",
+                                  max_length=8)
+
+    def __init__(self, owner_id: int, ore: str | None, quality: str | None,
+                 tier: str | None = None, browser_message=None):
+        super().__init__()
+        self.owner_id = owner_id
+        self.ore = ore
+        self.quality = quality
+        self.tier = tier
+        self.browser_message = browser_message
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        uid = SUID(interaction, self.owner_id)
+        total = len(db.market_by_seller(uid, self.ore, self.quality, limit=100000,
+                                        tier=self.tier))
+        if total <= 0:
+            await interaction.response.send_message("❌ Nothing to cancel.", ephemeral=True)
+            return
+        raw = str(self.amount.value).strip().lower()
+        if raw in ("all", "max"):
+            n = total
+        else:
+            try:
+                n = int(raw)
+            except ValueError:
+                await interaction.response.send_message("❌ Amount must be a number or ALL.",
+                                                        ephemeral=True)
+                return
+        n = max(1, min(n, total))
+        await interaction.response.defer(ephemeral=True)
+        done = db.market_cancel_many(uid, self.ore, self.quality, self.tier, n)
+        await interaction.followup.send(
+            f"🚫 Cancelled **{done}** listing(s) - items returned to your inventory.",
+            ephemeral=True)
+        if self.browser_message is not None:
+            try:
+                embed, view = await render_cancel_browser(
+                    self.owner_id, interaction, ore=self.ore, quality=self.quality,
+                    page=0, tier=self.tier)
+                await self.browser_message.edit(embed=embed, view=view)
+            except Exception:
+                pass
+
+
 class CancelBrowser(discord.ui.View):
+    """Mirrors the market_list UI: tier + ore + quality, Inspect, Cancel This, pages."""
+
     def __init__(self, owner_id: int, scope: str, ore: str | None = None,
-                 quality: str | None = None, sort: str | None = None,
-                 page: int = 0, pages: int = 1,
+                 quality: str | None = None, page: int = 0, pages: int = 1,
                  chunk: list[dict] | None = None, tier: str | None = None):
         super().__init__(timeout=300)
         self.owner_id = owner_id
         self.scope = scope
         self.ore = ore
         self.quality = quality
-        self.sort = sort
         self.page = page
         self.pages = pages
         self.tier = tier
@@ -2477,9 +2488,24 @@ class CancelBrowser(discord.ui.View):
         self.add_item(CancelTierSelect(owner_id, scope, current=tier))
         self.add_item(CancelOreSelect(owner_id, scope, current=ore, tier=tier))
         self.add_item(CancelQualitySelect(owner_id, scope, ore=ore, current=quality, tier=tier))
-        self.add_item(CancelSortSelect(owner_id, sort))
         if self.chunk:
             self.add_item(self._inspect_btn())
+        if self.tier and self.ore and self.quality:
+            self.add_item(self._cancel_this_btn())
+
+    def _cancel_this_btn(self):
+        view = self
+
+        async def cb(interaction: discord.Interaction):
+            if interaction.user.id != view.owner_id:
+                await interaction.response.send_message("That's not yours!", ephemeral=True)
+                return
+            await interaction.response.send_modal(
+                CancelAmountModal(view.owner_id, view.ore, view.quality, view.tier,
+                                  browser_message=interaction.message))
+        btn = discord.ui.Button(label="Cancel this", style=discord.ButtonStyle.danger, emoji="🗑️")
+        btn.callback = cb
+        return btn
 
     def _inspect_btn(self):
         view = self
@@ -2502,7 +2528,7 @@ class CancelBrowser(discord.ui.View):
             await interaction.response.send_message("That's not yours!", ephemeral=True)
             return
         embed, view = await render_cancel_browser(self.owner_id, interaction, ore=self.ore,
-                                                  quality=self.quality, sort=self.sort,
+                                                  quality=self.quality,
                                                   page=self.page + delta, tier=self.tier)
         await interaction.response.edit_message(embed=embed, view=view)
 
