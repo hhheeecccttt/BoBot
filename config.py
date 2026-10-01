@@ -6,7 +6,7 @@ Everything else (bot.py, db.py) reads from here, so you only edit one place.
 from datetime import timezone
 
 # --- Spins ---
-SPINS_PER_DAY = 3
+SPINS_PER_DAY = 10
 RESET_TIMEZONE = timezone.utc  # daily reset at 00:00 UTC
 
 # Rarity: (chance %, quicksell value $, color for embed, dot emoji for spin line)
