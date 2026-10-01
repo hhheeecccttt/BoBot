@@ -146,6 +146,14 @@ def check_achievements(user_id: str, u: dict, rarity: str, quality: str,
         grant("rich_75k")
     if bal >= 100000:
         grant("rich_100k")
+    if bal >= 200000:
+        grant("rich_200k")
+    if bal >= 300000:
+        grant("rich_300k")
+    if bal >= 500000:
+        grant("rich_500k")
+    if bal >= 1000000:
+        grant("rich_1m")
     if u.get("sell_count", 0) >= 10:
         grant("merchant_10")
     if u.get("buy_count", 0) >= 10:
@@ -1444,7 +1452,7 @@ async def networth(interaction: discord.Interaction, user: discord.User | None =
     target = user or interaction.user
     tid = SUID(interaction, target.id)
     t = db.get_user(tid)
-    public = bool(t.get("balance_public", 0))
+    public = bool(t.get("networth_public", 0))
     if target.id != interaction.user.id and not public:
         await interaction.response.send_message(
             f"🔒 **{(await display_name(interaction, tid))}'s** net worth is private.",
@@ -1951,9 +1959,8 @@ class MarketListingInspectSelect(discord.ui.Select):
                         f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
                         f"Quicksell value: **${quick:,}**",
             color=0x9C27B0)
-        view = ListingInspectView(interaction.user.id, listing)
-        # public inspect (not private) so anyone can see + buy
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
+        # public inspect (not private) so anyone can see; buying happens via the Inspect pop-up
+        await interaction.response.send_message(embed=embed, ephemeral=False)
 
 
 class BuyAmountModal(discord.ui.Modal, title="Buy - how many?"):
@@ -2060,26 +2067,6 @@ class BuyAmountModal(discord.ui.Modal, title="Buy - how many?"):
                                     ref_message=msg)
 
 
-class ListingInspectView(discord.ui.View):
-    """Buy button for one inspected listing. Bound to whoever opened it."""
-
-    def __init__(self, buyer_id: int, listing: dict):
-        super().__init__(timeout=300)
-        self.buyer_id = buyer_id
-        self.listing_id = listing["id"]
-        self.ore = listing["ore"]
-        self.quality = listing["quality"]
-        self.unit_price = listing["price"]
-
-    @discord.ui.button(label="Buy", style=discord.ButtonStyle.green, emoji="🛒")
-    async def buy(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.buyer_id:
-            await interaction.response.send_message("Inspect it yourself to buy it!", ephemeral=True)
-            return
-        await interaction.response.send_modal(
-            BuyAmountModal(self.buyer_id, self.ore, self.quality, self.unit_price))
-
-
 class MarketBrowser(discord.ui.View):
     """All dropdowns always up: tier + ore + quality + sort, inspect button, pages."""
 
@@ -2145,9 +2132,18 @@ class MarketInspectPopup(discord.ui.View):
         self.listings = listings
         self.selected_id = listings[0]["id"] if listings else None
         self.add_item(MarketListingInspectSelect(listings))
+        self.add_item(self._buy_btn())
 
-    @discord.ui.button(label="Buy", style=discord.ButtonStyle.green, emoji="🛒")
-    async def buy(self, interaction: discord.Interaction, button: discord.ui.Button):
+    def _buy_btn(self):
+        view = self
+
+        async def cb(interaction: discord.Interaction):
+            await view._do_buy(interaction)
+        btn = discord.ui.Button(label="Buy", style=discord.ButtonStyle.green, emoji="🛒")
+        btn.callback = cb
+        return btn
+
+    async def _do_buy(self, interaction: discord.Interaction):
         if interaction.user.id != self.viewer_id:
             await interaction.response.send_message("That's not yours!", ephemeral=True)
             return
@@ -2198,7 +2194,9 @@ class MarketInspectPopup(discord.ui.View):
                 db.update_user(buyer, rarest_buy=f"{listing['rarity']}|{listing['quality']}|{listing['ore']}")
         except Exception:
             pass
-        button.disabled = True
+        for item in self.children:
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
         try:
             result = await interaction.response.send_message(
                 f"✅ {interaction.user.mention} bought **{listing['quality']} {listing['ore']}** "
@@ -3159,7 +3157,7 @@ SETTING_DEFS = [
     ("balance", "balance_public", "💵 Balance"),
     ("mail", "mail_public", "📬 Mail"),
     ("ores", "ores_public", "⛏️ Ores"),
-    ("timezone", "timezone", "🕐 Timezone"),
+    ("networth", "networth_public", "💎 Net Worth"),
 ]
 
 
