@@ -958,7 +958,7 @@ class BrowserInspectSelect(discord.ui.Select):
         else:
             embed = await inspect_text(interaction, scoped, rarity, quality,
                                        s["ore"], s["count"])
-        await interaction.response.send_message(embed=embed, ephemeral=not view.public)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 class InvBrowser(discord.ui.View):
@@ -1180,7 +1180,7 @@ class InvBrowser(discord.ui.View):
                 else:
                     embed = await inspect_text(interaction, scoped, s["rarity"], s["quality"],
                                                s["ore"], s["count"])
-                await interaction.response.send_message(embed=embed, ephemeral=not view.public)
+                await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             pop = StackInspectView(view.viewer_id, view.target_id, view.source,
                                    stacks, view.public, guild=view.guild,
