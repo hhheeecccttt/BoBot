@@ -427,7 +427,7 @@ def ore_tier_label(ore: str, rarities: list[str]) -> str:
 
 async def inspect_text(interaction: discord.Interaction, uid: str, rarity: str, quality: str,
                        ore: str, count: int) -> str:
-    """Quality first, then tier/quality/combo odds, quicksell, origin, tip."""
+    """Quality first, then tier/quality/combo odds, quicksell, origin."""
     value_each = config.quicksell_value(rarity)
     pct, one_in = config.combined_odds(rarity, quality)
     r_chance = config.RARITIES[rarity]["chance"]
@@ -450,8 +450,7 @@ async def inspect_text(interaction: discord.Interaction, uid: str, rarity: str, 
         f"Quality: **{quality}** - {q_chance:g}% (1 in {config.rarity_one_in(q_chance)} chance)\n"
         f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
         f"Quicksell: **${value_each:,}** each (**${value_each * count:,}** for all)\n"
-        f"{origin_block}"
-        f"Tip: use the inventory **Quicksell** button, `/quicksell_all`, or `/market_list`."
+        f"{origin_block}".rstrip()
     )
 
 
@@ -1230,8 +1229,7 @@ def vault_inspect_text(uid: str, rarity: str, quality: str, ore: str, count: int
         f"Quality: **{quality}** - {q_chance:g}% (1 in {config.rarity_one_in(q_chance)} chance)\n"
         f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
         f"Quicksell value: **${value_each:,}** each (**${value_each * count:,}** total)\n"
-        f"{origin_line}"
-        f"Tip: use **Un-vault** to move it back to inventory."
+        f"{origin_line}".rstrip()
     )
 
 
@@ -2402,11 +2400,19 @@ class CancelListingInspectSelect(discord.ui.Select):
         quick = config.quicksell_value(listing["rarity"])
         r_chance = config.RARITIES[listing["rarity"]]["chance"]
         q_chance = config.QUALITIES[listing["quality"]]["chance"]
+        pct, one_in = config.combined_odds(listing["rarity"], listing["quality"])
+        try:
+            total_n = len(db.market_by_seller(view.scope, listing["ore"], listing["quality"],
+                                             limit=100000, tier=listing["rarity"]))
+        except Exception:
+            total_n = 1
+        total_n = max(1, total_n)
         embed = discord.Embed(
-            title=f"{listing['ore']} - ${listing['price']:,}",
-            description=f"Quality: **{listing['quality']}** - {q_chance:g}% (1 in {config.rarity_one_in(q_chance)} chance)\n"
-                        f"Tier: **{config.tier_name(listing['rarity'])}** - {r_chance:g}% (1 in {config.rarity_one_in(r_chance)} chance)\n"
-                        f"Quicksell value: **${quick:,}**",
+            title=f"{listing['ore']} ({listing['quality']})",
+            description=f"Tier: **{config.tier_name(listing['rarity'])}** - {r_chance:g}% (1 in {config.rarity_one_in(r_chance)} chance)\n"
+                        f"Quality: **{listing['quality']}** - {q_chance:g}% (1 in {config.rarity_one_in(q_chance)} chance)\n"
+                        f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
+                        f"Quicksell: **${quick:,}** each (**${quick * total_n:,}** for all)",
             color=0xF44336)
         # info-only card; cancelling happens via the pop-up Cancel button
         await interaction.response.send_message(embed=embed, ephemeral=True)
