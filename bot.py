@@ -2408,29 +2408,8 @@ class CancelListingInspectSelect(discord.ui.Select):
                         f"Tier: **{config.tier_name(listing['rarity'])}** - {r_chance:g}% (1 in {config.rarity_one_in(r_chance)} chance)\n"
                         f"Quicksell value: **${quick:,}**",
             color=0xF44336)
-        cview = CancelListingView(view.owner_id, listing["id"])
-        await interaction.response.send_message(embed=embed, view=cview, ephemeral=True)
-
-
-class CancelListingView(discord.ui.View):
-    def __init__(self, owner_id: int, listing_id: int):
-        super().__init__(timeout=180)
-        self.owner_id = owner_id
-        self.listing_id = listing_id
-
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="🗑️")
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("That's not yours!", ephemeral=True)
-            return
-        ok, msg = db.market_cancel(self.listing_id, SUID(interaction, self.owner_id),
-                                   guild_scope(interaction))
-        button.disabled = True
-        try:
-            await interaction.response.edit_message(view=self)
-        except Exception:
-            pass
-        await interaction.followup.send(("✅ " if ok else "❌ ") + msg, ephemeral=True)
+        # info-only card; cancelling happens via the pop-up Cancel button
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 class CancelAmountModal(discord.ui.Modal, title="Cancel listings"):
@@ -2543,10 +2522,11 @@ class CancelBrowser(discord.ui.View):
         self.add_item(CancelTierSelect(owner_id, scope, current=tier))
         self.add_item(CancelOreSelect(owner_id, scope, current=ore, tier=tier))
         self.add_item(CancelQualitySelect(owner_id, scope, ore=ore, current=quality, tier=tier))
-        self.add_item(self._prev_btn())
-        self.add_item(self._next_btn())
         if self.chunk:
             self.add_item(self._inspect_btn())
+        if pages > 1:
+            self.add_item(self._prev_btn())
+            self.add_item(self._next_btn())
         if self.tier and self.ore and self.quality:
             self.add_item(self._cancel_this_btn())
 
