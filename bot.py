@@ -301,7 +301,7 @@ def format_achievements(newly: list[str]) -> str:
 
 async def achievement_reply(interaction: discord.Interaction, mention: str,
                             newly: list[str], ref_message=None):
-    """Announce unlocks as a REPLY (falls back to followup). De-duped, always one message."""
+    """Announce unlocks as a public REPLY (falls back to plain public sends). Always one message."""
     if not newly:
         return
     seen, unique = set(), []
@@ -313,11 +313,18 @@ async def achievement_reply(interaction: discord.Interaction, mention: str,
     try:
         ref = ref_message or await interaction.original_response()
         await interaction.channel.send(content=text, reference=ref)
+        return
     except Exception:
-        try:
-            await interaction.followup.send(text)
-        except Exception:
-            pass
+        pass
+    try:
+        await interaction.channel.send(content=text)
+        return
+    except Exception:
+        pass
+    try:
+        await interaction.followup.send(text, ephemeral=False)
+    except Exception:
+        pass
 
 
 # ---------- spin view (quicksell button) ----------
@@ -1668,9 +1675,7 @@ class ListAmountModal(discord.ui.Modal, title="List ores"):
             db.update_user(uid, market_put_count=uu.get("market_put_count", 0) + made)
             newly_put = check_achievements(uid, db.get_user(uid), "", "")
             if newly_put:
-                await interaction.followup.send(
-                    f"{interaction.user.mention} " + format_achievements(newly_put),
-                    ephemeral=True)
+                await achievement_reply(interaction, interaction.user.mention, newly_put)
         sync_collectors(uid)
         if self.bview is not None and self.browser_message is not None:
             try:
@@ -2382,7 +2387,14 @@ class CancelListingInspectSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         if self.values[0] == "none":
             return
-        view: CancelBrowser = self.view
+        view = self.view  # CancelInspectPopup
+        if interaction.user.id != view.owner_id:
+            await interaction.response.send_message("That's not yours!", ephemeral=True)
+            return
+        try:
+            view.selected_id = int(self.values[0])
+        except Exception:
+            pass
         listing = db.market_get(int(self.values[0]))
         if listing is None or listing["seller_id"] != view.scope:
             await interaction.response.send_message("❌ That listing is gone!", ephemeral=True)
@@ -2470,8 +2482,51 @@ class CancelAmountModal(discord.ui.Modal, title="Cancel listings"):
                 pass
 
 
+class CancelInspectPopup(discord.ui.View):
+    """Ephemeral pop-up: pick a listing to inspect + Cancel button for the picked one."""
+
+    def __init__(self, owner_id: int, scope: str, listings: list[dict]):
+        super().__init__(timeout=180)
+        self.owner_id = owner_id
+        self.scope = scope
+        self.listings = listings
+        self.selected_id = listings[0]["id"] if listings else None
+        self.add_item(CancelListingInspectSelect(listings))
+        self.add_item(self._cancel_btn())
+
+    def _cancel_btn(self):
+        view = self
+
+        async def cb(interaction: discord.Interaction):
+            if interaction.user.id != view.owner_id:
+                await interaction.response.send_message("That's not yours!", ephemeral=True)
+                return
+            if not view.selected_id:
+                await interaction.response.send_message("❌ Pick a listing first!",
+                                                        ephemeral=True)
+                return
+            listing = db.market_get(view.selected_id)
+            if listing is None or listing["seller_id"] != view.scope:
+                await interaction.response.send_message("❌ That listing is gone!",
+                                                        ephemeral=True)
+                return
+            ok, msg = db.market_cancel(view.selected_id, view.scope,
+                                       guild_scope(interaction))
+            for item in view.children:
+                if isinstance(item, discord.ui.Button):
+                    item.disabled = True
+            try:
+                await interaction.response.edit_message(view=view)
+            except Exception:
+                pass
+            await interaction.followup.send(("🚫 " if ok else "❌ ") + msg, ephemeral=True)
+        btn = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.danger, emoji="🗑️")
+        btn.callback = cb
+        return btn
+
+
 class CancelBrowser(discord.ui.View):
-    """Mirrors the market_list UI: tier + ore + quality, Inspect, Cancel This, pages."""
+    """Mirrors the market_list UI: tier + ore + quality, pages + Inspect, Cancel This."""
 
     def __init__(self, owner_id: int, scope: str, ore: str | None = None,
                  quality: str | None = None, page: int = 0, pages: int = 1,
@@ -2488,6 +2543,8 @@ class CancelBrowser(discord.ui.View):
         self.add_item(CancelTierSelect(owner_id, scope, current=tier))
         self.add_item(CancelOreSelect(owner_id, scope, current=ore, tier=tier))
         self.add_item(CancelQualitySelect(owner_id, scope, ore=ore, current=quality, tier=tier))
+        self.add_item(self._prev_btn())
+        self.add_item(self._next_btn())
         if self.chunk:
             self.add_item(self._inspect_btn())
         if self.tier and self.ore and self.quality:
@@ -2503,9 +2560,28 @@ class CancelBrowser(discord.ui.View):
             await interaction.response.send_modal(
                 CancelAmountModal(view.owner_id, view.ore, view.quality, view.tier,
                                   browser_message=interaction.message))
-        btn = discord.ui.Button(label="Cancel this", style=discord.ButtonStyle.danger, emoji="🗑️")
+        btn = discord.ui.Button(label="Cancel this", style=discord.ButtonStyle.danger, emoji="🗑️",
+                                row=3)
         btn.callback = cb
         return btn
+
+    def _page_btn(self, delta: int, emoji: str):
+        view = self
+
+        async def cb(interaction: discord.Interaction):
+            if interaction.user.id != view.owner_id:
+                await interaction.response.send_message("That's not yours!", ephemeral=True)
+                return
+            await view._flip(interaction, delta)
+        btn = discord.ui.Button(label="", emoji=emoji, style=discord.ButtonStyle.secondary, row=3)
+        btn.callback = cb
+        return btn
+
+    def _prev_btn(self):
+        return self._page_btn(-1, "◀")
+
+    def _next_btn(self):
+        return self._page_btn(1, "▶")
 
     def _inspect_btn(self):
         view = self
@@ -2514,12 +2590,12 @@ class CancelBrowser(discord.ui.View):
             if interaction.user.id != view.owner_id:
                 await interaction.response.send_message("That's not yours!", ephemeral=True)
                 return
-            pop = discord.ui.View(timeout=180)
-            pop.add_item(CancelListingInspectSelect(view.chunk))
+            pop = CancelInspectPopup(interaction.user.id, view.scope, view.chunk)
             await interaction.response.send_message(
                 content=f"🔍 Inspect - pick a listing ({len(view.chunk)} shown):",
                 view=pop, ephemeral=True)
-        btn = discord.ui.Button(label="Inspect", style=discord.ButtonStyle.secondary, emoji="🔍")
+        btn = discord.ui.Button(label="Inspect", style=discord.ButtonStyle.secondary, emoji="🔍",
+                                row=3)
         btn.callback = cb
         return btn
 
@@ -2531,14 +2607,6 @@ class CancelBrowser(discord.ui.View):
                                                   quality=self.quality,
                                                   page=self.page + delta, tier=self.tier)
         await interaction.response.edit_message(embed=embed, view=view)
-
-    @discord.ui.button(label="", emoji="◀", style=discord.ButtonStyle.secondary, row=4)
-    async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._flip(interaction, -1)
-
-    @discord.ui.button(label="", emoji="▶", style=discord.ButtonStyle.secondary, row=4)
-    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._flip(interaction, 1)
 
 
 # ----- stats / streak / achievements -----
