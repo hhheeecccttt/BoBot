@@ -327,11 +327,81 @@ async def achievement_reply(interaction: discord.Interaction, mention: str,
         pass
 
 
+def _spin_limits(gid: str) -> tuple[int, bool, int]:
+    """Live server spin limits: (spins_per_day, unlimited_day, max_per_spin)."""
+    raw_spd = (db.get_setting("spins_per_day", gid) or "10").strip().lower()
+    unlimited_day = raw_spd in ("inf", "infinite", "unlimited")
+    try:
+        spins_per_day = 10 ** 12 if unlimited_day else max(1, int(raw_spd))
+    except ValueError:
+        spins_per_day = 10
+    try:
+        max_spin = max(1, min(100000, int(db.get_setting("max_spin", gid) or 1)))
+    except ValueError:
+        max_spin = 1
+    return spins_per_day, unlimited_day, max_spin
+
+
+def _spin_result_embed(pulls: list, n: int, u: dict, spins_left_text: str,
+                       display_name: str) -> tuple:
+    """Shared single/multi spin result embed. Returns (embed, rarity, quality, ore)."""
+    if n == 1:
+        rarity, quality, ore = pulls[0]
+        value = config.quicksell_value(rarity)
+        embed = discord.Embed(
+            title=f"{ore} ({quality} {config.QUALITIES[quality]['emoji']})!",
+            description=f"{config.tier_name(rarity)} {config.RARITIES[rarity]['dot']}",
+            color=config.RARITIES[rarity]["color"],
+        )
+        embed.add_field(name="💰 Quicksell", value=f"${value:,}", inline=True)
+        embed.add_field(name="🎰 Spins left today", value=spins_left_text, inline=True)
+        embed.set_footer(text=f"🔥 {u['streak']}-day streak • {display_name}")
+        if rarity == "Mythical":
+            embed.add_field(name="🌟", value="**MYTHICAL TIER PULL!!** Insane luck.", inline=False)
+        return embed, rarity, quality, ore
+    best = max(pulls, key=lambda p: (SPIN_ORDER.index(p[0]),
+                                     list(config.QUALITIES.keys()).index(p[1])))
+    haul_value = sum(config.quicksell_value(p[0]) for p in pulls)
+    counts = {r: sum(1 for p in pulls if p[0] == r) for r in SPIN_ORDER}
+    lines = [f"{config.RARITIES[r]['dot']} {config.tier_name(r)} x{counts[r]}"
+             for r in SPIN_ORDER if counts[r]]
+    embed = discord.Embed(title=f"🎰 x{n} spins!", color=0x9E9E9E)
+    embed.add_field(
+        name="⭐ Best pull",
+        value=f"**{best[2]} ({best[1]})** - {config.tier_name(best[0])} {config.RARITIES[best[0]]['dot']}",
+        inline=False)
+    embed.add_field(name="📦 Haul", value="\n".join(lines) if lines else "-", inline=True)
+    embed.add_field(name="💰 Haul quicksell value", value=f"${haul_value:,}", inline=True)
+    embed.add_field(name="🎰 Spins left today", value=spins_left_text, inline=True)
+    embed.set_footer(text=f"🔥 {u['streak']}-day streak • {display_name}")
+    return embed, best[0], best[1], best[2]
+
+
+async def _spin_achievements_reply(interaction: discord.Interaction, uid: str, u: dict,
+                                   pulls: list, result_msg, mention: str):
+    """Shared post-spin achievement check + public reply."""
+    newly: list[str] = []
+    first = True
+    for r, q, _o in sorted(set(pulls)):
+        try:
+            newly += check_achievements(uid, u, r, q, collectors=first, pulled=True)
+        except Exception as e:
+            print(f"SPINDBG check failed for {uid} ({r},{q}): {type(e).__name__}: {e}")
+        first = False
+    if newly:
+        seen, unique = set(), []
+        for line in newly:
+            if line not in seen:
+                seen.add(line)
+                unique.append(line)
+        await achievement_reply(interaction, mention, unique, ref_message=result_msg)
+
+
 # ---------- spin view (quicksell button) ----------
 
 class SpinView(discord.ui.View):
-    def __init__(self, owner_id: int, item_id: int, rarity: str, quality: str, ore: str,
-                 guild: str = "DM"):
+    def __init__(self, owner_id: int, item_id: int | None, rarity: str, quality: str, ore: str,
+                 guild: str = "DM", amount: int = 1):
         super().__init__(timeout=300)
         self.owner_id = owner_id
         self.item_id = item_id
@@ -340,7 +410,11 @@ class SpinView(discord.ui.View):
         self.ore = ore
         self.sold = False
         self.guild = guild
-        self.quicksell.label = f"Quicksell ${config.quicksell_value(rarity):,}"
+        self.amount = max(1, amount)
+        if item_id is None:
+            self.remove_item(self.quicksell)
+        else:
+            self.quicksell.label = f"Quicksell ${config.quicksell_value(rarity):,}"
 
     @discord.ui.button(label="Spin Again", style=discord.ButtonStyle.primary, emoji="🎰")
     async def again(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -351,39 +425,34 @@ class SpinView(discord.ui.View):
         uid = SUID(interaction, self.owner_id)
         db.init_db()
         u = db.reset_spins_if_new_day(uid, user_today(uid))
-        if not UNLIMITED_SPINS:
-            try:
-                spd = max(1, int(db.get_setting("spins_per_day", guild_scope(interaction)) or 10))
-            except ValueError:
-                spd = 10
-            if u["spins_used_today"] >= spd:
-                await interaction.followup.send(
-                    f"❌ Out of spins! Resets in **{user_time_until_reset(uid)}**.")
-                return
-            left = f"{spd - u['spins_used_today'] - 1}/{spd}"
+        gid = guild_scope(interaction)
+        spins_per_day, unlimited_day, max_spin = _spin_limits(gid)
+        if UNLIMITED_SPINS:
+            n = min(self.amount, max_spin)
+            spins_left_text = "∞ (test mode)"
         else:
-            left = "∞ (test mode)"
-        pulls, u, item_id = _run_spin_batch(uid, 1)
-        rarity, quality, ore = pulls[0]
-        value = config.quicksell_value(rarity)
-        embed = discord.Embed(
-            title=f"{ore} ({quality} {config.QUALITIES[quality]['emoji']})!",
-            description=f"{config.tier_name(rarity)} {config.RARITIES[rarity]['dot']}",
-            color=config.RARITIES[rarity]["color"],
-        )
-        embed.add_field(name="💰 Quicksell", value=f"${value:,}", inline=True)
-        embed.add_field(name="🎰 Spins left today", value=left, inline=True)
-        embed.set_footer(text=f"🔥 {u['streak']}-day streak • {interaction.user.display_name}")
-        if rarity == "Mythical":
-            embed.add_field(name="🌟", value="**MYTHICAL TIER PULL!!** Insane luck.", inline=False)
+            remaining = spins_per_day - u["spins_used_today"]
+            if remaining <= 0:
+                await interaction.followup.send(
+                    f"❌ You're out of spins! You get **{spins_per_day}** per day.\n"
+                    f"⏳ Resets in **{user_time_until_reset(uid)}**.")
+                return
+            n = min(self.amount, max_spin, remaining)
+            spins_left_text = None  # computed after spinning
+        pulls, u, item_id = _run_spin_batch(uid, n)
+        if spins_left_text is None:
+            spins_left_text = ("∞" if unlimited_day
+                               else f"{spins_per_day - u['spins_used_today']}/{spins_per_day}")
+        embed, rarity, quality, ore = _spin_result_embed(
+            pulls, n, u, spins_left_text, interaction.user.display_name)
         view = SpinView(interaction.user.id, item_id, rarity, quality, ore,
-                          guild=guild_scope(interaction))
+                        guild=gid, amount=n)
+        if not UNLIMITED_SPINS and not unlimited_day and u["spins_used_today"] >= spins_per_day:
+            view.again.disabled = True
         result_msg = await interaction.followup.send(content=await _spin_ping(uid, interaction),
                                                      embed=embed, view=view)
-        newly = check_achievements(uid, db.get_user(uid), rarity, quality, pulled=True)
-        if newly:
-            await achievement_reply(interaction, interaction.user.mention, newly,
-                                    ref_message=result_msg)
+        await _spin_achievements_reply(interaction, uid, u, pulls, result_msg,
+                                       interaction.user.mention)
 
     @discord.ui.button(label="Inspect", style=discord.ButtonStyle.secondary, emoji="🔍")
     async def inspect(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1378,63 +1447,18 @@ async def spin(interaction: discord.Interaction, amount: app_commands.Range[int,
 
     ping = await _spin_ping(uid, interaction)
 
-    if n == 1:
-        rarity, quality, ore = pulls[0]
-        value = config.quicksell_value(rarity)
-        embed = discord.Embed(
-            title=f"{ore} ({quality} {config.QUALITIES[quality]['emoji']})!",
-            description=f"{config.tier_name(rarity)} {config.RARITIES[rarity]['dot']}",
-            color=config.RARITIES[rarity]["color"],
-        )
-        embed.add_field(name="💰 Quicksell", value=f"${value:,}", inline=True)
-        embed.add_field(name="🎰 Spins left today", value=spins_left_text, inline=True)
-        embed.set_footer(text=f"🔥 {u['streak']}-day streak • {interaction.user.display_name}")
-        if rarity == "Mythical":
-            embed.add_field(name="🌟", value="**MYTHICAL TIER PULL!!** Insane luck.", inline=False)
-        if item_id is not None:
-            view = SpinView(interaction.user.id, item_id, rarity, quality, ore,
-                              guild=guild_scope(interaction))
-            result_msg = await interaction.followup.send(content=ping, embed=embed, view=view)
-        else:
-            result_msg = await interaction.followup.send(content=ping, embed=embed)
-    else:
-        # summary for multi-spins: rarest pull first
-        best = max(pulls, key=lambda p: (SPIN_ORDER.index(p[0]),
-                                         list(config.QUALITIES.keys()).index(p[1])))
-        haul_value = sum(config.quicksell_value(p[0]) for p in pulls)
-        counts = {r: sum(1 for p in pulls if p[0] == r) for r in SPIN_ORDER}
-        lines = [f"{config.RARITIES[r]['dot']} {config.tier_name(r)} x{counts[r]}"
-                 for r in SPIN_ORDER if counts[r]]
-        embed = discord.Embed(title=f"🎰 x{n} spins!", color=0x9E9E9E)
-        embed.add_field(
-            name="⭐ Best pull",
-            value=f"**{best[2]} ({best[1]})** - {config.tier_name(best[0])} {config.RARITIES[best[0]]['dot']}",
-            inline=False)
-        embed.add_field(name="📦 Haul", value="\n".join(lines) if lines else "-", inline=True)
-        embed.add_field(name="💰 Haul quicksell value", value=f"${haul_value:,}", inline=True)
-        embed.add_field(name="🎰 Spins left today", value=spins_left_text, inline=True)
-        embed.set_footer(text=f"🔥 {u['streak']}-day streak • {interaction.user.display_name}")
-        result_msg = await interaction.followup.send(content=ping, embed=embed)
+    embed, rarity, quality, ore = _spin_result_embed(
+        pulls, n, u, spins_left_text, interaction.user.display_name)
+    view = SpinView(interaction.user.id, item_id, rarity, quality, ore,
+                    guild=guild_scope(interaction), amount=n)
+    if not UNLIMITED_SPINS and not unlimited_day and u["spins_used_today"] >= spins_per_day:
+        view.again.disabled = True
+    result_msg = await interaction.followup.send(content=ping, embed=embed, view=view)
     # achievements AFTER the result so "thinking" always resolves fast;
     # collectors scanned once (first pair) instead of per pair
-    newly: list[str] = []
-    first = True
-    for r, q, _o in sorted(set(pulls)):
-        try:
-            newly += check_achievements(uid, u, r, q, collectors=first, pulled=True)
-        except Exception as e:
-            print(f"SPINDBG check failed for {uid} ({r},{q}): {type(e).__name__}: {e}")
-        first = False
-    print(f"SPINDBG spins={u['total_spins']} pairs={sorted(set(pulls))} newly={len(newly)}")
-    if newly:
-        # de-dupe (multiple checks can grant different achievements; same one can't double-grant)
-        seen, unique = set(), []
-        for line in newly:
-            if line not in seen:
-                seen.add(line)
-                unique.append(line)
-        await achievement_reply(interaction, interaction.user.mention, unique,
-                                ref_message=result_msg)
+    print(f"SPINDBG spins={u['total_spins']} pairs={sorted(set(pulls))}")
+    await _spin_achievements_reply(interaction, uid, u, pulls, result_msg,
+                                   interaction.user.mention)
 
 
 @bot.tree.command(name="wallet", description="Check wallet money (yours, or a public one).")
