@@ -425,16 +425,39 @@ def ore_tier_label(ore: str, rarities: list[str]) -> str:
     return f"{ore} ({tiers})"
 
 
-async def inspect_text(interaction: discord.Interaction, uid: str, rarity: str, quality: str,
-                       ore: str, count: int) -> str:
-    """Quality first, then tier/quality/combo odds, quicksell, origin."""
+def _inspect_lines(rarity: str, quality: str, total_count: int) -> str:
+    """Shared Tier/Quality/Odds/Quicksell block used by every inspect card."""
     value_each = config.quicksell_value(rarity)
     pct, one_in = config.combined_odds(rarity, quality)
     r_chance = config.RARITIES[rarity]["chance"]
     q_chance = config.QUALITIES[quality]["chance"]
+    return (
+        f"Tier: **{config.tier_name(rarity)}** - {r_chance:g}% (1 in {config.rarity_one_in(r_chance)} chance)\n"
+        f"Quality: **{quality}** - {q_chance:g}% (1 in {config.rarity_one_in(q_chance)} chance)\n"
+        f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
+        f"Quicksell: **${value_each:,}** each (**${value_each * total_count:,}** for all)"
+    )
+
+
+def _inspect_embed(ore: str, rarity: str, quality: str, total_count: int,
+                   color: int, extra: str = "") -> discord.Embed:
+    """Every inspect card: `Ore (Quality)` title + the shared body block."""
+    body = _inspect_lines(rarity, quality, total_count)
+    if extra:
+        body += f"\n{extra}"
+    return discord.Embed(title=f"{ore} ({quality})", description=body, color=color)
+
+
+def _rarity_color(rarity: str) -> int:
+    return config.RARITIES.get(rarity, {}).get("color", 0x9E9E9E)
+
+
+async def inspect_text(interaction: discord.Interaction, uid: str, rarity: str, quality: str,
+                       ore: str, count: int) -> discord.Embed:
+    """Inventory inspect card (with market-origin lines when relevant)."""
     origins = db.origin_counts(uid, rarity, quality, ore)
     market_n = origins.get("market", 0)
-    origin_block = ""
+    extra = ""
     if market_n > 0:
         sellers = db.origin_sellers(uid, rarity, quality, ore)
         parts = []
@@ -443,15 +466,8 @@ async def inspect_text(interaction: discord.Interaction, uid: str, rarity: str, 
         unknown = market_n - sum(sellers.values())
         if unknown > 0:
             parts.append(f"🛒 Bought on the player market x{unknown}")
-        origin_block = "\n".join(parts) + "\n" if parts else ""
-    return (
-        f"**{ore} ({quality}) x{count}**\n"
-        f"Tier: **{config.tier_name(rarity)}** - {r_chance:g}% (1 in {config.rarity_one_in(r_chance)} chance)\n"
-        f"Quality: **{quality}** - {q_chance:g}% (1 in {config.rarity_one_in(q_chance)} chance)\n"
-        f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
-        f"Quicksell: **${value_each:,}** each (**${value_each * count:,}** for all)\n"
-        f"{origin_block}".rstrip()
-    )
+        extra = "\n".join(parts)
+    return _inspect_embed(ore, rarity, quality, count, _rarity_color(rarity), extra)
 
 
 # ---------- unified inventory/vault browser ----------
@@ -869,11 +885,11 @@ class BrowserInspectSelect(discord.ui.Select):
         view.selected = (rarity, quality, ore)
         scoped = f"{view.guild}:{view.target_id}"
         if view.source == "vault" or not view._data_inv():
-            text = vault_inspect_text(scoped, rarity, quality, s["ore"], s["count"])
+            embed = vault_inspect_text(scoped, rarity, quality, s["ore"], s["count"])
         else:
-            text = await inspect_text(interaction, scoped, rarity, quality,
-                                      s["ore"], s["count"])
-        await interaction.response.send_message(text, ephemeral=not view.public)
+            embed = await inspect_text(interaction, scoped, rarity, quality,
+                                       s["ore"], s["count"])
+        await interaction.response.send_message(embed=embed, ephemeral=not view.public)
 
 
 class InvBrowser(discord.ui.View):
@@ -1090,12 +1106,12 @@ class InvBrowser(discord.ui.View):
                 s = stacks[0]
                 scoped = f"{view.guild}:{view.target_id}"
                 if view.source == "vault" or not view._data_inv():
-                    text = vault_inspect_text(scoped, s["rarity"], s["quality"],
-                                              s["ore"], s["count"])
+                    embed = vault_inspect_text(scoped, s["rarity"], s["quality"],
+                                               s["ore"], s["count"])
                 else:
-                    text = await inspect_text(interaction, scoped, s["rarity"], s["quality"],
-                                              s["ore"], s["count"])
-                await interaction.response.send_message(text, ephemeral=not view.public)
+                    embed = await inspect_text(interaction, scoped, s["rarity"], s["quality"],
+                                               s["ore"], s["count"])
+                await interaction.response.send_message(embed=embed, ephemeral=not view.public)
                 return
             pop = StackInspectView(view.viewer_id, view.target_id, view.source,
                                    stacks, view.public, guild=view.guild,
@@ -1215,22 +1231,11 @@ class InvBrowser(discord.ui.View):
 
 # ---------- vault inspect text (used by the unified browser) ----------
 
-def vault_inspect_text(uid: str, rarity: str, quality: str, ore: str, count: int) -> str:
-    value_each = config.quicksell_value(rarity)
-    pct, one_in = config.combined_odds(rarity, quality)
-    r_chance = config.RARITIES[rarity]["chance"]
-    q_chance = config.QUALITIES[quality]["chance"]
+def vault_inspect_text(uid: str, rarity: str, quality: str, ore: str, count: int) -> discord.Embed:
     origins = db.vault_origin_counts(uid, rarity, quality, ore)
     market_n = origins.get("market", 0)
-    origin_line = f"🛒 {market_n}x bought on the player market\n" if market_n else ""
-    return (
-        f"**{ore} ({quality}) x{count}**\n"
-        f"Tier: **{config.tier_name(rarity)}** - {r_chance:g}% (1 in {config.rarity_one_in(r_chance)} chance)\n"
-        f"Quality: **{quality}** - {q_chance:g}% (1 in {config.rarity_one_in(q_chance)} chance)\n"
-        f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
-        f"Quicksell value: **${value_each:,}** each (**${value_each * count:,}** total)\n"
-        f"{origin_line}".rstrip()
-    )
+    extra = f"🛒 {market_n}x bought on the player market" if market_n else ""
+    return _inspect_embed(ore, rarity, quality, count, _rarity_color(rarity), extra)
 
 
 @bot.tree.command(name="vault", description="See vaults (yours, or a public one). No quicksell here.")
@@ -1950,18 +1955,9 @@ class MarketListingInspectSelect(discord.ui.Select):
             await interaction.response.send_message("❌ That listing just sold!", ephemeral=True)
             return
         seller = await seller_name(interaction, listing["seller_id"])
-        quick = config.quicksell_value(listing["rarity"])
-        pct, one_in = config.combined_odds(listing["rarity"], listing["quality"])
-        r_chance = config.RARITIES[listing["rarity"]]["chance"]
-        q_chance = config.QUALITIES[listing["quality"]]["chance"]
-        embed = discord.Embed(
-            title=f"{listing['ore']} - ${listing['price']:,}",
-            description=f"Quality: **{listing['quality']}** - {q_chance:g}% (1 in {config.rarity_one_in(q_chance)} chance)\n"
-                        f"Seller: **{seller}**\n"
-                        f"Tier: **{config.tier_name(listing['rarity'])}** - {r_chance:g}% (1 in {config.rarity_one_in(r_chance)} chance)\n"
-                        f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
-                        f"Quicksell value: **${quick:,}**",
-            color=0x9C27B0)
+        embed = _inspect_embed(listing["ore"], listing["rarity"], listing["quality"], 1,
+                               0x9C27B0,
+                               f"Price: **${listing['price']:,}**\nSeller: **{seller}**")
         # private inspect so only the person who clicked sees it
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -2397,23 +2393,14 @@ class CancelListingInspectSelect(discord.ui.Select):
         if listing is None or listing["seller_id"] != view.scope:
             await interaction.response.send_message("❌ That listing is gone!", ephemeral=True)
             return
-        quick = config.quicksell_value(listing["rarity"])
-        r_chance = config.RARITIES[listing["rarity"]]["chance"]
-        q_chance = config.QUALITIES[listing["quality"]]["chance"]
-        pct, one_in = config.combined_odds(listing["rarity"], listing["quality"])
         try:
             total_n = len(db.market_by_seller(view.scope, listing["ore"], listing["quality"],
                                              limit=100000, tier=listing["rarity"]))
         except Exception:
             total_n = 1
         total_n = max(1, total_n)
-        embed = discord.Embed(
-            title=f"{listing['ore']} ({listing['quality']})",
-            description=f"Tier: **{config.tier_name(listing['rarity'])}** - {r_chance:g}% (1 in {config.rarity_one_in(r_chance)} chance)\n"
-                        f"Quality: **{listing['quality']}** - {q_chance:g}% (1 in {config.rarity_one_in(q_chance)} chance)\n"
-                        f"Odds: **{pct:.4g}%** ({one_in} chance)\n"
-                        f"Quicksell: **${quick:,}** each (**${quick * total_n:,}** for all)",
-            color=0xF44336)
+        embed = _inspect_embed(listing["ore"], listing["rarity"], listing["quality"],
+                               total_n, 0xF44336)
         # info-only card; cancelling happens via the pop-up Cancel button
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -2705,9 +2692,7 @@ class StatsView(discord.ui.View):
                 return discord.Embed(title=title, description="Nothing here yet!", color=0x9E9E9E)
             triple = (item["rarity"], item["quality"], item["ore"])
         rarity, quality, ore = triple
-        text = await inspect_text(interaction, self.target_id, rarity, quality, ore, 1)
-        return discord.Embed(title=title, description=text,
-                             color=config.RARITIES.get(rarity, {}).get("color", 0x9E9E9E))
+        return await inspect_text(interaction, self.target_id, rarity, quality, ore, 1)
 
 
 
